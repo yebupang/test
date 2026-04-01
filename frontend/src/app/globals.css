@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-950 text-gray-100 antialiased;
+  }
+}
+
+@layer utilities {
+  .text-up   { @apply text-red-400; }
+  .text-down { @apply text-green-400; }
+  .bg-card   { @apply bg-gray-900 border border-gray-800 rounded-xl; }
+}
