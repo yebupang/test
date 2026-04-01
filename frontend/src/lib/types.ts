@@ -112,6 +112,74 @@ export interface WatchListItem {
   updated_at?: string;
 }
 
+// ─── Strategy ─────────────────────────────────────────────
+
+export const POSITION_TYPE_OPTIONS = [
+  { value: "bottom_fishing", label: "抄底仓", color: "purple", desc: "大跌时抄底用" },
+  { value: "defensive",      label: "防守仓", color: "blue",   desc: "防御性资产" },
+  { value: "allocation",     label: "配置仓", color: "green",  desc: "长期核心持仓" },
+  { value: "volatile",       label: "波动仓", color: "yellow", desc: "中期趋势机会" },
+  { value: "speculative",    label: "投机仓", color: "red",    desc: "短期博弈/事件驱动" },
+] as const;
+
+export interface PositionRule {
+  id?: number;
+  strategy_id?: number;
+  position_type: string;
+  target_pct?: number;
+  min_pct?: number;
+  max_pct?: number;
+  trigger_condition?: string;
+  description?: string;
+}
+
+export interface Strategy {
+  id: number;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  version: number;
+  parsed_rules?: unknown;
+  position_rules: PositionRule[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ComplianceItem {
+  level: "info" | "warning" | "violation";
+  category: string;
+  title: string;
+  detail: string;
+  symbol?: string;
+  current_value?: number;
+  target_value?: number;
+  suggested_action?: string;
+}
+
+export interface ComplianceReport {
+  strategy_id: number;
+  strategy_name: string;
+  checked_at: string;
+  total_market_value: number;
+  items: ComplianceItem[];
+  violations: number;
+  warnings: number;
+  infos: number;
+  overall_status: "ok" | "warning" | "violation";
+}
+
+export interface StrategyAlert {
+  id: number;
+  strategy_id: number;
+  level: string;
+  category?: string;
+  title: string;
+  detail?: string;
+  symbol?: string;
+  is_read: boolean;
+  created_at: string;
+}
+
 export interface SyncLog {
   id: number;
   broker: string;

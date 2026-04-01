@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import init_db
-from routers import accounts, portfolio, sync, watchlist
+from routers import accounts, portfolio, sync, watchlist, strategy
 from config import get_settings
 
 logging.basicConfig(
@@ -44,8 +44,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="投资助手 API",
-    description="个人投资决策支持系统 — Phase 1: 股票数据同步",
-    version="0.1.0",
+    description="个人投资决策支持系统 — Phase 2: 交易策略引擎",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -61,6 +61,7 @@ app.include_router(accounts.router)
 app.include_router(portfolio.router)
 app.include_router(sync.router)
 app.include_router(watchlist.router)
+app.include_router(strategy.router)
 
 
 @app.get("/")

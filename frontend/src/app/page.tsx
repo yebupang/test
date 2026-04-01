@@ -8,15 +8,17 @@ import PortfolioOverview from "@/components/PortfolioOverview";
 import PositionTable from "@/components/PositionTable";
 import SyncPanel from "@/components/SyncPanel";
 import WatchlistPanel from "@/components/WatchlistPanel";
+import StrategyPanel from "@/components/StrategyPanel";
 import AccountSetup from "@/components/AccountSetup";
-import { LayoutDashboard, List, RefreshCw, Star, Settings } from "lucide-react";
+import { LayoutDashboard, List, RefreshCw, Star, Settings, BookOpen } from "lucide-react";
 
-type Tab = "overview" | "positions" | "sync" | "watchlist";
+type Tab = "overview" | "positions" | "sync" | "watchlist" | "strategy";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "overview", label: "总览", icon: <LayoutDashboard size={20} /> },
+  { id: "overview",  label: "总览", icon: <LayoutDashboard size={20} /> },
   { id: "positions", label: "持仓", icon: <List size={20} /> },
-  { id: "sync", label: "同步", icon: <RefreshCw size={20} /> },
+  { id: "strategy",  label: "策略", icon: <BookOpen size={20} /> },
+  { id: "sync",      label: "同步", icon: <RefreshCw size={20} /> },
   { id: "watchlist", label: "关注", icon: <Star size={20} /> },
 ];
 
@@ -117,6 +119,12 @@ export default function Home() {
                 <div className="bg-card p-4">
                   <h2 className="text-sm text-gray-400 mb-4">数据同步</h2>
                   <SyncPanel accounts={accounts} onSynced={refreshSummary} />
+                </div>
+              )}
+              {tab === "strategy" && (
+                <div className="bg-card p-4">
+                  <h2 className="text-sm text-gray-400 mb-4">交易策略</h2>
+                  <StrategyPanel />
                 </div>
               )}
               {tab === "watchlist" && (

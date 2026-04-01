@@ -26,5 +26,6 @@ async def get_db():
 
 async def init_db():
     from models.portfolio import Account, Position, WatchList, PriceHistory, SyncLog  # noqa
+    from models.strategy import Strategy, PositionRule, StrategyAlert  # noqa
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

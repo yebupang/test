@@ -53,6 +53,22 @@ export const syncCSV = async (accountId: number, file: File) => {
   return res.json();
 };
 
+// ─── Strategy ─────────────────────────────────────────────
+export const getStrategies = () => request("/strategies/");
+export const getStrategy = (id: number) => request(`/strategies/${id}`);
+export const createStrategy = (data: object) =>
+  request("/strategies/", { method: "POST", body: JSON.stringify(data) });
+export const updateStrategy = (id: number, data: object) =>
+  request(`/strategies/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteStrategy = (id: number) =>
+  request(`/strategies/${id}`, { method: "DELETE" });
+export const runComplianceCheck = (id: number) =>
+  request(`/strategies/${id}/check`, { method: "POST" });
+export const getAlerts = (id: number, unreadOnly = false) =>
+  request(`/strategies/${id}/alerts${unreadOnly ? "?unread_only=true" : ""}`);
+export const markAlertRead = (strategyId: number, alertId: number) =>
+  request(`/strategies/${strategyId}/alerts/${alertId}/read`, { method: "PATCH" });
+
 // ─── Watchlist ────────────────────────────────────────────
 export const getWatchlist = () => request("/watchlist/");
 export const addToWatchlist = (data: object) =>
