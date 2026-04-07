@@ -14,7 +14,7 @@ pandas==2.2.2
 numpy==1.26.4
 
 # 富途 OpenAPI（需要本地运行 OpenD）
-futu-api==9.0.3308
+futu-api==10.2.6218
 
 # 盈透证券
 ib_insync==0.9.86
