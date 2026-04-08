@@ -50,10 +50,7 @@ class FutuBroker:
 
     def _get_trade_ctx_hk(self):
         if not self._trade_ctx_hk:
-            self._trade_ctx_hk = self._ft.OpenHKTradeContext(
-                host=self.host, port=self.port,
-                trd_env=self._ft.TrdEnv.REAL,  # 明确指定真实账户
-            )
+            self._trade_ctx_hk = self._ft.OpenHKTradeContext(host=self.host, port=self.port)
             if self.trade_pwd:
                 ret, data = self._trade_ctx_hk.unlock_trade(self.trade_pwd)
                 if ret != self._ft.RET_OK:
@@ -62,10 +59,7 @@ class FutuBroker:
 
     def _get_trade_ctx_us(self):
         if not self._trade_ctx_us:
-            self._trade_ctx_us = self._ft.OpenUSTradeContext(
-                host=self.host, port=self.port,
-                trd_env=self._ft.TrdEnv.REAL,  # 明确指定真实账户
-            )
+            self._trade_ctx_us = self._ft.OpenUSTradeContext(host=self.host, port=self.port)
             if self.trade_pwd:
                 ret, data = self._trade_ctx_us.unlock_trade(self.trade_pwd)
                 if ret != self._ft.RET_OK:
@@ -85,7 +79,7 @@ class FutuBroker:
 
     def _fetch_positions_hk(self) -> List[Dict[str, Any]]:
         ctx = self._get_trade_ctx_hk()
-        ret, data = ctx.position_list_query()
+        ret, data = ctx.position_list_query(trd_env=self._ft.TrdEnv.REAL)
         logger.info(f"港股持仓查询 ret={ret}, 行数={len(data) if ret == self._ft.RET_OK else 0}")
         if ret != self._ft.RET_OK:
             logger.warning(f"港股持仓查询失败: {data}")
@@ -125,7 +119,7 @@ class FutuBroker:
 
     def _fetch_positions_us(self) -> List[Dict[str, Any]]:
         ctx = self._get_trade_ctx_us()
-        ret, data = ctx.position_list_query()
+        ret, data = ctx.position_list_query(trd_env=self._ft.TrdEnv.REAL)
         logger.info(f"美股持仓查询 ret={ret}, 行数={len(data) if ret == self._ft.RET_OK else 0}")
         if ret != self._ft.RET_OK:
             logger.warning(f"美股持仓查询失败: {data}")
@@ -170,7 +164,7 @@ class FutuBroker:
         try:
             # 港股
             ctx_hk = self._get_trade_ctx_hk()
-            ret_hk, data_hk = ctx_hk.position_list_query()
+            ret_hk, data_hk = ctx_hk.position_list_query(trd_env=self._ft.TrdEnv.REAL)
             result["hk"] = {
                 "ret": ret_hk,
                 "columns": list(data_hk.columns) if ret_hk == self._ft.RET_OK else [],
@@ -180,7 +174,7 @@ class FutuBroker:
 
             # 美股
             ctx_us = self._get_trade_ctx_us()
-            ret_us, data_us = ctx_us.position_list_query()
+            ret_us, data_us = ctx_us.position_list_query(trd_env=self._ft.TrdEnv.REAL)
             result["us"] = {
                 "ret": ret_us,
                 "columns": list(data_us.columns) if ret_us == self._ft.RET_OK else [],
@@ -188,7 +182,7 @@ class FutuBroker:
                 "error": str(data_us) if ret_us != self._ft.RET_OK else None,
             }
 
-            # 账户列表（明确查真实账户）
+            # 账户列表（真实账户）
             ret_acc, acc_data = ctx_hk.accinfo_query(trd_env=self._ft.TrdEnv.REAL)
             result["accounts"] = {
                 "ret": ret_acc,
