@@ -7,7 +7,6 @@
 
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +21,7 @@ class FutuBroker:
         self.host = host
         self.port = port
         self.trade_pwd = trade_pwd
+        self._ft = None
         self._quote_ctx = None
         self._trade_ctx_hk = None
         self._trade_ctx_us = None
@@ -32,75 +32,75 @@ class FutuBroker:
             self._ft = ft
             self._quote_ctx = ft.OpenQuoteContext(host=self.host, port=self.port)
             logger.info(f"富途 QuoteContext 连接成功 {self.host}:{self.port}")
-            return True
         except ImportError:
             raise RuntimeError("futu-api 未安装，请运行: pip install futu-api")
         except Exception as e:
             raise RuntimeError(f"富途 OpenD 连接失败: {e}\n请确认 OpenD 已在本地运行")
 
     def _close(self):
-        if self._quote_ctx:
-            self._quote_ctx.close()
-        if self._trade_ctx_hk:
-            self._trade_ctx_hk.close()
-        if self._trade_ctx_us:
-            self._trade_ctx_us.close()
+        try:
+            if self._quote_ctx:
+                self._quote_ctx.close()
+            if self._trade_ctx_hk:
+                self._trade_ctx_hk.close()
+            if self._trade_ctx_us:
+                self._trade_ctx_us.close()
+        except Exception:
+            pass
 
     def _get_trade_ctx_hk(self):
         if not self._trade_ctx_hk:
             self._trade_ctx_hk = self._ft.OpenHKTradeContext(host=self.host, port=self.port)
-            if self.trade_pwd:
-                self._trade_ctx_hk.unlock_trade(self.trade_pwd)
+            ret, data = self._trade_ctx_hk.unlock_trade(self.trade_pwd) if self.trade_pwd else (None, None)
+            if ret is not None and ret != self._ft.RET_OK:
+                logger.warning(f"港股交易解锁失败: {data}")
         return self._trade_ctx_hk
 
     def _get_trade_ctx_us(self):
         if not self._trade_ctx_us:
             self._trade_ctx_us = self._ft.OpenUSTradeContext(host=self.host, port=self.port)
-            if self.trade_pwd:
-                self._trade_ctx_us.unlock_trade(self.trade_pwd)
+            ret, data = self._trade_ctx_us.unlock_trade(self.trade_pwd) if self.trade_pwd else (None, None)
+            if ret is not None and ret != self._ft.RET_OK:
+                logger.warning(f"美股交易解锁失败: {data}")
         return self._trade_ctx_us
 
     def get_positions(self) -> List[Dict[str, Any]]:
         """获取所有账户持仓（港股 + 美股）"""
         self._connect()
         positions = []
-
         try:
-            # 港股持仓
-            hk_positions = self._fetch_positions_hk()
-            positions.extend(hk_positions)
-
-            # 美股持仓
-            us_positions = self._fetch_positions_us()
-            positions.extend(us_positions)
-
+            positions.extend(self._fetch_positions_hk())
+            positions.extend(self._fetch_positions_us())
         finally:
             self._close()
-
         return positions
 
     def _fetch_positions_hk(self) -> List[Dict[str, Any]]:
         ctx = self._get_trade_ctx_hk()
         ret, data = ctx.position_list_query()
+        logger.info(f"港股持仓查询 ret={ret}, 行数={len(data) if ret == self._ft.RET_OK else 0}")
         if ret != self._ft.RET_OK:
             logger.warning(f"港股持仓查询失败: {data}")
             return []
+        if data.empty:
+            logger.info("港股持仓为空")
+            return []
 
+        logger.info(f"港股持仓列名: {list(data.columns)}")
         result = []
         for _, row in data.iterrows():
-            symbol_raw = row.get("code", "")
-            # 富途代码格式：HK.00700 -> 00700
+            symbol_raw = str(row.get("code", ""))
             symbol = symbol_raw.split(".")[-1] if "." in symbol_raw else symbol_raw
-            cost = float(row.get("cost_price", 0) or 0)
             qty = float(row.get("qty", 0) or 0)
-            cur_price = float(row.get("market_val", 0) or 0) / qty if qty > 0 else 0
+            cost = float(row.get("cost_price", 0) or 0)
             market_val = float(row.get("market_val", 0) or 0)
+            cur_price = market_val / qty if qty > 0 else 0
             pnl = float(row.get("pl_val", 0) or 0)
             pnl_pct = (pnl / (cost * qty) * 100) if cost > 0 and qty > 0 else 0
 
             result.append({
                 "symbol": symbol,
-                "name": row.get("stock_name", ""),
+                "name": str(row.get("stock_name", "")),
                 "market": "HK",
                 "currency": "HKD",
                 "quantity": qty,
@@ -118,16 +118,21 @@ class FutuBroker:
     def _fetch_positions_us(self) -> List[Dict[str, Any]]:
         ctx = self._get_trade_ctx_us()
         ret, data = ctx.position_list_query()
+        logger.info(f"美股持仓查询 ret={ret}, 行数={len(data) if ret == self._ft.RET_OK else 0}")
         if ret != self._ft.RET_OK:
             logger.warning(f"美股持仓查询失败: {data}")
             return []
+        if data.empty:
+            logger.info("美股持仓为空")
+            return []
 
+        logger.info(f"美股持仓列名: {list(data.columns)}")
         result = []
         for _, row in data.iterrows():
-            symbol_raw = row.get("code", "")
+            symbol_raw = str(row.get("code", ""))
             symbol = symbol_raw.split(".")[-1] if "." in symbol_raw else symbol_raw
-            cost = float(row.get("cost_price", 0) or 0)
             qty = float(row.get("qty", 0) or 0)
+            cost = float(row.get("cost_price", 0) or 0)
             market_val = float(row.get("market_val", 0) or 0)
             cur_price = market_val / qty if qty > 0 else 0
             pnl = float(row.get("pl_val", 0) or 0)
@@ -135,7 +140,7 @@ class FutuBroker:
 
             result.append({
                 "symbol": symbol,
-                "name": row.get("stock_name", ""),
+                "name": str(row.get("stock_name", "")),
                 "market": "US",
                 "currency": "USD",
                 "quantity": qty,
@@ -150,11 +155,43 @@ class FutuBroker:
         logger.info(f"富途美股持仓: {len(result)} 条")
         return result
 
+    def debug_raw(self) -> Dict[str, Any]:
+        """返回原始 API 数据，用于排查问题"""
+        self._connect()
+        result = {}
+        try:
+            # 港股
+            ctx_hk = self._get_trade_ctx_hk()
+            ret_hk, data_hk = ctx_hk.position_list_query()
+            result["hk"] = {
+                "ret": ret_hk,
+                "columns": list(data_hk.columns) if ret_hk == self._ft.RET_OK else [],
+                "rows": data_hk.to_dict("records") if ret_hk == self._ft.RET_OK else [],
+                "error": str(data_hk) if ret_hk != self._ft.RET_OK else None,
+            }
+
+            # 美股
+            ctx_us = self._get_trade_ctx_us()
+            ret_us, data_us = ctx_us.position_list_query()
+            result["us"] = {
+                "ret": ret_us,
+                "columns": list(data_us.columns) if ret_us == self._ft.RET_OK else [],
+                "rows": data_us.to_dict("records") if ret_us == self._ft.RET_OK else [],
+                "error": str(data_us) if ret_us != self._ft.RET_OK else None,
+            }
+
+            # 账户列表
+            ret_acc, acc_data = ctx_hk.accinfo_query()
+            result["accounts"] = {
+                "ret": ret_acc,
+                "data": acc_data.to_dict("records") if ret_acc == self._ft.RET_OK else str(acc_data),
+            }
+        finally:
+            self._close()
+        return result
+
     def get_quote(self, symbols_with_market: List[tuple]) -> Dict[str, Dict]:
-        """
-        获取实时行情
-        :param symbols_with_market: [(symbol, market), ...] e.g. [("AAPL", "US"), ("00700", "HK")]
-        """
+        """获取实时行情"""
         self._connect()
         try:
             ft = self._ft

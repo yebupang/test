@@ -87,3 +87,18 @@ async def get_sync_logs(limit: int = 20, db: AsyncSession = Depends(get_db)):
         select(SyncLog).order_by(desc(SyncLog.started_at)).limit(limit)
     )
     return result.scalars().all()
+
+
+@router.get("/futu/debug")
+async def debug_futu():
+    """调试：返回富途 API 原始数据，用于排查持仓为空问题"""
+    from brokers.futu_broker import FutuBroker
+    broker = FutuBroker(
+        host=settings.futu_host,
+        port=settings.futu_port,
+        trade_pwd=settings.futu_trade_pwd,
+    )
+    try:
+        return broker.debug_raw()
+    except Exception as e:
+        raise HTTPException(503, f"富途连接失败: {e}")
