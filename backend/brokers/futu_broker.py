@@ -50,18 +50,26 @@ class FutuBroker:
 
     def _get_trade_ctx_hk(self):
         if not self._trade_ctx_hk:
-            self._trade_ctx_hk = self._ft.OpenHKTradeContext(host=self.host, port=self.port)
-            ret, data = self._trade_ctx_hk.unlock_trade(self.trade_pwd) if self.trade_pwd else (None, None)
-            if ret is not None and ret != self._ft.RET_OK:
-                logger.warning(f"港股交易解锁失败: {data}")
+            self._trade_ctx_hk = self._ft.OpenHKTradeContext(
+                host=self.host, port=self.port,
+                trd_env=self._ft.TrdEnv.REAL,  # 明确指定真实账户
+            )
+            if self.trade_pwd:
+                ret, data = self._trade_ctx_hk.unlock_trade(self.trade_pwd)
+                if ret != self._ft.RET_OK:
+                    logger.warning(f"港股交易解锁失败: {data}")
         return self._trade_ctx_hk
 
     def _get_trade_ctx_us(self):
         if not self._trade_ctx_us:
-            self._trade_ctx_us = self._ft.OpenUSTradeContext(host=self.host, port=self.port)
-            ret, data = self._trade_ctx_us.unlock_trade(self.trade_pwd) if self.trade_pwd else (None, None)
-            if ret is not None and ret != self._ft.RET_OK:
-                logger.warning(f"美股交易解锁失败: {data}")
+            self._trade_ctx_us = self._ft.OpenUSTradeContext(
+                host=self.host, port=self.port,
+                trd_env=self._ft.TrdEnv.REAL,  # 明确指定真实账户
+            )
+            if self.trade_pwd:
+                ret, data = self._trade_ctx_us.unlock_trade(self.trade_pwd)
+                if ret != self._ft.RET_OK:
+                    logger.warning(f"美股交易解锁失败: {data}")
         return self._trade_ctx_us
 
     def get_positions(self) -> List[Dict[str, Any]]:
@@ -180,8 +188,8 @@ class FutuBroker:
                 "error": str(data_us) if ret_us != self._ft.RET_OK else None,
             }
 
-            # 账户列表
-            ret_acc, acc_data = ctx_hk.accinfo_query()
+            # 账户列表（明确查真实账户）
+            ret_acc, acc_data = ctx_hk.accinfo_query(trd_env=self._ft.TrdEnv.REAL)
             result["accounts"] = {
                 "ret": ret_acc,
                 "data": acc_data.to_dict("records") if ret_acc == self._ft.RET_OK else str(acc_data),
