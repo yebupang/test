@@ -162,32 +162,61 @@ class FutuBroker:
         self._connect()
         result = {}
         try:
-            # 港股
             ctx_hk = self._get_trade_ctx_hk()
-            ret_hk, data_hk = ctx_hk.position_list_query(trd_env=self._ft.TrdEnv.REAL)
+            ctx_us = self._get_trade_ctx_us()
+
+            # ── 第一步：获取账户列表 ──────────────────────────
+            ret_list, acc_list = ctx_hk.get_acc_list()
+            result["acc_list"] = {
+                "ret": ret_list,
+                "accounts": acc_list.to_dict("records") if ret_list == self._ft.RET_OK else str(acc_list),
+            }
+
+            # 从账户列表中找真实账户的 acc_id
+            real_acc_id = None
+            if ret_list == self._ft.RET_OK and not acc_list.empty:
+                real_rows = acc_list[acc_list["trd_env"] == self._ft.TrdEnv.REAL] if "trd_env" in acc_list.columns else acc_list
+                if not real_rows.empty:
+                    real_acc_id = int(real_rows.iloc[0].get("acc_id", 0))
+
+            result["detected_real_acc_id"] = real_acc_id
+
+            # ── 第二步：用 acc_id 查持仓 ──────────────────────
+            hk_kwargs = {"trd_env": self._ft.TrdEnv.REAL}
+            us_kwargs = {"trd_env": self._ft.TrdEnv.REAL}
+            if real_acc_id:
+                hk_kwargs["acc_id"] = real_acc_id
+                us_kwargs["acc_id"] = real_acc_id
+
+            ret_hk, data_hk = ctx_hk.position_list_query(**hk_kwargs)
             result["hk"] = {
                 "ret": ret_hk,
+                "acc_id_used": real_acc_id,
                 "columns": list(data_hk.columns) if ret_hk == self._ft.RET_OK else [],
                 "rows": data_hk.to_dict("records") if ret_hk == self._ft.RET_OK else [],
                 "error": str(data_hk) if ret_hk != self._ft.RET_OK else None,
             }
 
-            # 美股
-            ctx_us = self._get_trade_ctx_us()
-            ret_us, data_us = ctx_us.position_list_query(trd_env=self._ft.TrdEnv.REAL)
+            ret_us, data_us = ctx_us.position_list_query(**us_kwargs)
             result["us"] = {
                 "ret": ret_us,
+                "acc_id_used": real_acc_id,
                 "columns": list(data_us.columns) if ret_us == self._ft.RET_OK else [],
                 "rows": data_us.to_dict("records") if ret_us == self._ft.RET_OK else [],
                 "error": str(data_us) if ret_us != self._ft.RET_OK else None,
             }
 
-            # 账户列表（真实账户）
-            ret_acc, acc_data = ctx_hk.accinfo_query(trd_env=self._ft.TrdEnv.REAL)
+            # ── 第三步：用 acc_id 查账户资产 ──────────────────
+            acc_kwargs = {"trd_env": self._ft.TrdEnv.REAL}
+            if real_acc_id:
+                acc_kwargs["acc_id"] = real_acc_id
+            ret_acc, acc_data = ctx_hk.accinfo_query(**acc_kwargs)
             result["accounts"] = {
                 "ret": ret_acc,
+                "acc_id_used": real_acc_id,
                 "data": acc_data.to_dict("records") if ret_acc == self._ft.RET_OK else str(acc_data),
             }
+
         finally:
             self._close()
         return result
