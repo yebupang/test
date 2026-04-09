@@ -7,6 +7,7 @@ from schemas.portfolio import SyncResult, SyncLogOut, CSVImportResult
 from services.sync_service import SyncService
 from config import get_settings
 from typing import List
+import asyncio
 
 router = APIRouter(prefix="/sync", tags=["数据同步"])
 settings = get_settings()
@@ -99,6 +100,13 @@ async def debug_futu():
         trade_pwd=settings.futu_trade_pwd,
     )
     try:
-        return broker.debug_raw()
+        # 富途 SDK 是同步阻塞调用，放到线程池避免卡住事件循环
+        result = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, broker.debug_raw),
+            timeout=15.0,
+        )
+        return result
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "富途 API 超时（15s），请确认 OpenD 正在运行")
     except Exception as e:
         raise HTTPException(503, f"富途连接失败: {e}")

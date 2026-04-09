@@ -3,6 +3,7 @@
 """
 
 import logging
+import asyncio
 from datetime import datetime
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +34,10 @@ class SyncService:
                 port=settings.futu_port,
                 trade_pwd=settings.futu_trade_pwd,
             )
-            positions_data = broker.get_positions()
+            positions_data = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, broker.get_positions),
+                timeout=30.0,
+            )
             count = await self._upsert_positions(account_id, positions_data)
 
             log.status = "success"
@@ -64,7 +68,10 @@ class SyncService:
                 port=settings.ib_port,
                 client_id=settings.ib_client_id,
             )
-            positions_data = broker.get_positions()
+            positions_data = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, broker.get_positions),
+                timeout=30.0,
+            )
             count = await self._upsert_positions(account_id, positions_data)
 
             log.status = "success"
