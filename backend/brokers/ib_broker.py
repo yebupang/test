@@ -7,9 +7,9 @@
 文档：https://ib-insync.readthedocs.io/
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -17,20 +17,35 @@ logger = logging.getLogger(__name__)
 class IBBroker:
     """盈透证券 TWS API 封装（使用 ib_insync）"""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 7497, client_id: int = 1):
+    def __init__(self, host: str = "127.0.0.1", port: int = 4001, client_id: int = 1):
         self.host = host
         self.port = port
         self.client_id = client_id
         self._ib = None
+        self._loop = None
+
+    def _ensure_event_loop(self):
+        """ib_insync 依赖 asyncio，在线程池里运行时需要手动创建事件循环"""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                raise RuntimeError("loop closed")
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        self._loop = loop
 
     def _connect(self):
+        self._ensure_event_loop()
         try:
-            from ib_insync import IB
-            self._ib = IB()
-            self._ib.connect(self.host, self.port, clientId=self.client_id, timeout=10)
-            logger.info(f"IB TWS 连接成功 {self.host}:{self.port}")
+            from ib_insync import IB, util
+            util.startLoop()  # 兼容 Jupyter/线程环境
         except ImportError:
             raise RuntimeError("ib_insync 未安装，请运行: pip install ib_insync")
+        try:
+            self._ib = IB()
+            self._ib.connect(self.host, self.port, clientId=self.client_id, timeout=15)
+            logger.info(f"IB TWS 连接成功 {self.host}:{self.port}")
         except Exception as e:
             raise RuntimeError(
                 f"IB TWS 连接失败: {e}\n"
@@ -38,8 +53,11 @@ class IBBroker:
             )
 
     def _disconnect(self):
-        if self._ib and self._ib.isConnected():
-            self._ib.disconnect()
+        try:
+            if self._ib and self._ib.isConnected():
+                self._ib.disconnect()
+        except Exception:
+            pass
 
     def get_positions(self) -> List[Dict[str, Any]]:
         """获取盈透所有持仓"""
