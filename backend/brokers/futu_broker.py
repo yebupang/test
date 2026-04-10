@@ -66,21 +66,108 @@ class FutuBroker:
                     logger.warning(f"美股交易解锁失败: {data}")
         return self._trade_ctx_us
 
+    def _is_real_env(self, trd_env_value) -> bool:
+        """判断 trd_env 是否为真实交易环境（兼容字符串和枚举两种形式）"""
+        if trd_env_value is None:
+            return False
+        s = str(trd_env_value).upper()
+        # futu-api 返回值可能是 "REAL"、"TrdEnv.REAL" 或枚举对象
+        return s in ("REAL", "TRDENV.REAL", "1") or trd_env_value == self._ft.TrdEnv.REAL
+
+    def _is_active(self, acc_status_value) -> bool:
+        """判断账户是否处于可用状态"""
+        if acc_status_value is None:
+            return True  # 没有 status 字段时，假设可用
+        s = str(acc_status_value).upper()
+        return s not in ("DISABLED", "INVALID", "TRDACCSTATUS.DISABLED")
+
+    def _get_acc_info(self) -> Dict[str, Optional[int]]:
+        """
+        获取账户列表，返回各市场对应的真实账户 acc_id。
+        - 先筛选 trd_env==REAL 且 acc_status!=DISABLED 的账户
+        - 再按 trdmarket_auth 分配 HK / US 账户
+        - 若无可用真实账户，降级使用模拟账户（SIMULATE）
+        """
+        ctx_hk = self._get_trade_ctx_hk()
+        ret, acc_list = ctx_hk.get_acc_list()
+
+        result: Dict[str, Optional[int]] = {"hk": None, "us": None}
+
+        if ret != self._ft.RET_OK:
+            logger.warning(f"get_acc_list 失败: {acc_list}")
+            return result
+
+        if acc_list is None or acc_list.empty:
+            logger.warning("账户列表为空")
+            return result
+
+        logger.info(f"账户列表 ({len(acc_list)} 条):\n{acc_list.to_string()}")
+
+        # 第一轮：寻找真实 + 可用账户
+        for _, row in acc_list.iterrows():
+            if not self._is_real_env(row.get("trd_env")):
+                continue
+            if not self._is_active(row.get("acc_status")):
+                logger.info(
+                    f"跳过 DISABLED 真实账户 acc_id={row.get('acc_id')} "
+                    f"trdmarket_auth={row.get('trdmarket_auth')}"
+                )
+                continue
+
+            acc_id = int(row.get("acc_id", 0))
+            auth = row.get("trdmarket_auth", [])
+            if isinstance(auth, str):
+                auth = [auth]
+
+            logger.info(f"可用真实账户 acc_id={acc_id} trdmarket_auth={auth}")
+            if "HK" in auth and result["hk"] is None:
+                result["hk"] = acc_id
+            if "US" in auth and result["us"] is None:
+                result["us"] = acc_id
+
+        # 第二轮：若真实账户均不可用，尝试模拟账户（方便开发测试）
+        if result["hk"] is None and result["us"] is None:
+            logger.warning("未找到可用真实账户，尝试使用模拟账户")
+            for _, row in acc_list.iterrows():
+                acc_id = int(row.get("acc_id", 0))
+                auth = row.get("trdmarket_auth", [])
+                if isinstance(auth, str):
+                    auth = [auth]
+                if "HK" in auth and result["hk"] is None:
+                    result["hk"] = acc_id
+                if "US" in auth and result["us"] is None:
+                    result["us"] = acc_id
+                logger.info(f"降级使用模拟账户 acc_id={acc_id} trdmarket_auth={auth}")
+
+        logger.info(f"最终使用账户 HK={result['hk']} US={result['us']}")
+        return result
+
     def get_positions(self) -> List[Dict[str, Any]]:
         """获取所有账户持仓（港股 + 美股）"""
         self._connect()
         positions = []
         try:
-            positions.extend(self._fetch_positions_hk())
-            positions.extend(self._fetch_positions_us())
+            acc_info = self._get_acc_info()
+            if acc_info["hk"]:
+                positions.extend(self._fetch_positions_hk(acc_id=acc_info["hk"]))
+            else:
+                logger.info("无港股账户，跳过港股持仓查询")
+
+            if acc_info["us"]:
+                positions.extend(self._fetch_positions_us(acc_id=acc_info["us"]))
+            else:
+                logger.info("无美股账户，跳过美股持仓查询")
         finally:
             self._close()
         return positions
 
-    def _fetch_positions_hk(self) -> List[Dict[str, Any]]:
+    def _fetch_positions_hk(self, acc_id: Optional[int] = None) -> List[Dict[str, Any]]:
         ctx = self._get_trade_ctx_hk()
-        ret, data = ctx.position_list_query(trd_env=self._ft.TrdEnv.REAL)
-        logger.info(f"港股持仓查询 ret={ret}, 行数={len(data) if ret == self._ft.RET_OK else 0}")
+        kwargs: Dict[str, Any] = {"trd_env": self._ft.TrdEnv.REAL}
+        if acc_id:
+            kwargs["acc_id"] = acc_id
+        ret, data = ctx.position_list_query(**kwargs)
+        logger.info(f"港股持仓查询 acc_id={acc_id} ret={ret}, 行数={len(data) if ret == self._ft.RET_OK else 0}")
         if ret != self._ft.RET_OK:
             logger.warning(f"港股持仓查询失败: {data}")
             return []
@@ -117,10 +204,13 @@ class FutuBroker:
         logger.info(f"富途港股持仓: {len(result)} 条")
         return result
 
-    def _fetch_positions_us(self) -> List[Dict[str, Any]]:
+    def _fetch_positions_us(self, acc_id: Optional[int] = None) -> List[Dict[str, Any]]:
         ctx = self._get_trade_ctx_us()
-        ret, data = ctx.position_list_query(trd_env=self._ft.TrdEnv.REAL)
-        logger.info(f"美股持仓查询 ret={ret}, 行数={len(data) if ret == self._ft.RET_OK else 0}")
+        kwargs: Dict[str, Any] = {"trd_env": self._ft.TrdEnv.REAL}
+        if acc_id:
+            kwargs["acc_id"] = acc_id
+        ret, data = ctx.position_list_query(**kwargs)
+        logger.info(f"美股持仓查询 acc_id={acc_id} ret={ret}, 行数={len(data) if ret == self._ft.RET_OK else 0}")
         if ret != self._ft.RET_OK:
             logger.warning(f"美股持仓查询失败: {data}")
             return []
@@ -160,60 +250,85 @@ class FutuBroker:
     def debug_raw(self) -> Dict[str, Any]:
         """返回原始 API 数据，用于排查问题"""
         self._connect()
-        result = {}
+        result: Dict[str, Any] = {}
         try:
             ctx_hk = self._get_trade_ctx_hk()
             ctx_us = self._get_trade_ctx_us()
 
-            # ── 第一步：获取账户列表 ──────────────────────────
+            # ── 第一步：获取账户列表 ──────────────────────────────────
             ret_list, acc_list = ctx_hk.get_acc_list()
+            acc_records = []
+            hk_acc_id = None
+            us_acc_id = None
+
+            if ret_list == self._ft.RET_OK and not acc_list.empty:
+                acc_records = acc_list.to_dict("records")
+                for row in acc_records:
+                    is_real = self._is_real_env(row.get("trd_env"))
+                    is_active = self._is_active(row.get("acc_status"))
+                    auth = row.get("trdmarket_auth", [])
+                    if isinstance(auth, str):
+                        auth = [auth]
+                    acc_id = int(row.get("acc_id", 0))
+
+                    row["_is_real"] = is_real
+                    row["_is_active"] = is_active
+
+                    if is_real and is_active:
+                        if "HK" in auth and hk_acc_id is None:
+                            hk_acc_id = acc_id
+                        if "US" in auth and us_acc_id is None:
+                            us_acc_id = acc_id
+
             result["acc_list"] = {
                 "ret": ret_list,
-                "accounts": acc_list.to_dict("records") if ret_list == self._ft.RET_OK else str(acc_list),
+                "accounts": acc_records,
+                "error": str(acc_list) if ret_list != self._ft.RET_OK else None,
             }
+            result["selected_hk_acc_id"] = hk_acc_id
+            result["selected_us_acc_id"] = us_acc_id
 
-            # 从账户列表中找真实账户的 acc_id
-            real_acc_id = None
-            if ret_list == self._ft.RET_OK and not acc_list.empty:
-                real_rows = acc_list[acc_list["trd_env"] == self._ft.TrdEnv.REAL] if "trd_env" in acc_list.columns else acc_list
-                if not real_rows.empty:
-                    real_acc_id = int(real_rows.iloc[0].get("acc_id", 0))
+            # ── 第二步：港股持仓 ──────────────────────────────────────
+            if hk_acc_id:
+                ret_hk, data_hk = ctx_hk.position_list_query(
+                    trd_env=self._ft.TrdEnv.REAL, acc_id=hk_acc_id
+                )
+            else:
+                ret_hk, data_hk = ctx_hk.position_list_query(trd_env=self._ft.TrdEnv.REAL)
 
-            result["detected_real_acc_id"] = real_acc_id
-
-            # ── 第二步：用 acc_id 查持仓 ──────────────────────
-            hk_kwargs = {"trd_env": self._ft.TrdEnv.REAL}
-            us_kwargs = {"trd_env": self._ft.TrdEnv.REAL}
-            if real_acc_id:
-                hk_kwargs["acc_id"] = real_acc_id
-                us_kwargs["acc_id"] = real_acc_id
-
-            ret_hk, data_hk = ctx_hk.position_list_query(**hk_kwargs)
             result["hk"] = {
                 "ret": ret_hk,
-                "acc_id_used": real_acc_id,
+                "acc_id_used": hk_acc_id,
                 "columns": list(data_hk.columns) if ret_hk == self._ft.RET_OK else [],
                 "rows": data_hk.to_dict("records") if ret_hk == self._ft.RET_OK else [],
                 "error": str(data_hk) if ret_hk != self._ft.RET_OK else None,
             }
 
-            ret_us, data_us = ctx_us.position_list_query(**us_kwargs)
+            # ── 第三步：美股持仓 ──────────────────────────────────────
+            if us_acc_id:
+                ret_us, data_us = ctx_us.position_list_query(
+                    trd_env=self._ft.TrdEnv.REAL, acc_id=us_acc_id
+                )
+            else:
+                # 不传 acc_id，让 OpenD 自动选择
+                ret_us, data_us = ctx_us.position_list_query(trd_env=self._ft.TrdEnv.REAL)
+
             result["us"] = {
                 "ret": ret_us,
-                "acc_id_used": real_acc_id,
+                "acc_id_used": us_acc_id,
                 "columns": list(data_us.columns) if ret_us == self._ft.RET_OK else [],
                 "rows": data_us.to_dict("records") if ret_us == self._ft.RET_OK else [],
                 "error": str(data_us) if ret_us != self._ft.RET_OK else None,
             }
 
-            # ── 第三步：用 acc_id 查账户资产 ──────────────────
-            acc_kwargs = {"trd_env": self._ft.TrdEnv.REAL}
-            if real_acc_id:
-                acc_kwargs["acc_id"] = real_acc_id
+            # ── 第四步：账户资产 ──────────────────────────────────────
+            acc_kwargs: Dict[str, Any] = {"trd_env": self._ft.TrdEnv.REAL}
+            if hk_acc_id:
+                acc_kwargs["acc_id"] = hk_acc_id
             ret_acc, acc_data = ctx_hk.accinfo_query(**acc_kwargs)
-            result["accounts"] = {
+            result["accinfo"] = {
                 "ret": ret_acc,
-                "acc_id_used": real_acc_id,
+                "acc_id_used": hk_acc_id,
                 "data": acc_data.to_dict("records") if ret_acc == self._ft.RET_OK else str(acc_data),
             }
 
