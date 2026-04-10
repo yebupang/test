@@ -81,29 +81,37 @@ class FutuBroker:
         s = str(acc_status_value).upper()
         return s not in ("DISABLED", "INVALID", "TRDACCSTATUS.DISABLED")
 
-    def _get_acc_info(self) -> Dict[str, Optional[int]]:
+    def _has_market_auth(self, row, market: str) -> bool:
+        """判断账户是否有指定市场的交易权限（兼容多种数据格式）"""
+        auth = row.get("trdmarket_auth", None)
+        if auth is None:
+            return False
+        # 无论 auth 是 list、枚举、字符串，全部转为大写字符串再匹配
+        # 例如：["HK"]、[TrdMarket.HK]、"HK"、"TrdMarket.HK" 都能匹配
+        return market.upper() in str(auth).upper()
+
+    def _get_acc_info(self) -> Dict[str, int]:
         """
         获取账户列表，返回各市场对应的真实账户 acc_id。
-        - 先筛选 trd_env==REAL 且 acc_status!=DISABLED 的账户
-        - 再按 trdmarket_auth 分配 HK / US 账户
-        - 若无可用真实账户，降级使用模拟账户（SIMULATE）
+        返回 0 表示使用 OpenD 默认账户（等同于 acc_id=0 默认值）。
+        优先级：真实+可用 > 真实+DISABLED > 模拟账户 > 0（默认）
         """
         ctx_hk = self._get_trade_ctx_hk()
         ret, acc_list = ctx_hk.get_acc_list()
 
-        result: Dict[str, Optional[int]] = {"hk": None, "us": None}
+        result: Dict[str, int] = {"hk": 0, "us": 0}
 
         if ret != self._ft.RET_OK:
-            logger.warning(f"get_acc_list 失败: {acc_list}")
+            logger.warning(f"get_acc_list 失败，将使用默认账户: {acc_list}")
             return result
 
         if acc_list is None or acc_list.empty:
-            logger.warning("账户列表为空")
+            logger.warning("账户列表为空，将使用默认账户")
             return result
 
         logger.info(f"账户列表 ({len(acc_list)} 条):\n{acc_list.to_string()}")
 
-        # 第一轮：寻找真实 + 可用账户
+        # 第一轮：真实 + 可用账户（最优先）
         for _, row in acc_list.iterrows():
             if not self._is_real_env(row.get("trd_env")):
                 continue
@@ -113,33 +121,50 @@ class FutuBroker:
                     f"trdmarket_auth={row.get('trdmarket_auth')}"
                 )
                 continue
-
             acc_id = int(row.get("acc_id", 0))
-            auth = row.get("trdmarket_auth", [])
-            if isinstance(auth, str):
-                auth = [auth]
-
-            logger.info(f"可用真实账户 acc_id={acc_id} trdmarket_auth={auth}")
-            if "HK" in auth and result["hk"] is None:
+            logger.info(f"可用真实账户 acc_id={acc_id} trdmarket_auth={row.get('trdmarket_auth')}")
+            if self._has_market_auth(row, "HK") and result["hk"] == 0:
                 result["hk"] = acc_id
-            if "US" in auth and result["us"] is None:
+            if self._has_market_auth(row, "US") and result["us"] == 0:
                 result["us"] = acc_id
 
-        # 第二轮：若真实账户均不可用，尝试模拟账户（方便开发测试）
-        if result["hk"] is None and result["us"] is None:
-            logger.warning("未找到可用真实账户，尝试使用模拟账户")
+        # 第二轮：真实账户存在但 DISABLED（acc_id 仍可尝试）
+        if result["hk"] == 0 or result["us"] == 0:
+            for _, row in acc_list.iterrows():
+                if not self._is_real_env(row.get("trd_env")):
+                    continue
+                acc_id = int(row.get("acc_id", 0))
+                if self._has_market_auth(row, "HK") and result["hk"] == 0:
+                    result["hk"] = acc_id
+                    logger.info(f"使用 DISABLED 真实账户（仍尝试）HK acc_id={acc_id}")
+                if self._has_market_auth(row, "US") and result["us"] == 0:
+                    result["us"] = acc_id
+                    logger.info(f"使用 DISABLED 真实账户（仍尝试）US acc_id={acc_id}")
+
+        # 第三轮：模拟账户（开发调试）
+        if result["hk"] == 0 or result["us"] == 0:
+            logger.warning("未找到可用真实账户，尝试模拟账户")
             for _, row in acc_list.iterrows():
                 acc_id = int(row.get("acc_id", 0))
-                auth = row.get("trdmarket_auth", [])
-                if isinstance(auth, str):
-                    auth = [auth]
-                if "HK" in auth and result["hk"] is None:
+                if self._has_market_auth(row, "HK") and result["hk"] == 0:
                     result["hk"] = acc_id
-                if "US" in auth and result["us"] is None:
+                    logger.info(f"降级使用模拟账户 HK acc_id={acc_id}")
+                if self._has_market_auth(row, "US") and result["us"] == 0:
                     result["us"] = acc_id
-                logger.info(f"降级使用模拟账户 acc_id={acc_id} trdmarket_auth={auth}")
+                    logger.info(f"降级使用模拟账户 US acc_id={acc_id}")
 
-        logger.info(f"最终使用账户 HK={result['hk']} US={result['us']}")
+        # 第四轮：任意账户（不管 trdmarket_auth）
+        if result["hk"] == 0 or result["us"] == 0:
+            for _, row in acc_list.iterrows():
+                acc_id = int(row.get("acc_id", 0))
+                if acc_id and result["hk"] == 0:
+                    result["hk"] = acc_id
+                    logger.info(f"无 trdmarket_auth 信息，使用任意账户 HK acc_id={acc_id}")
+                if acc_id and result["us"] == 0:
+                    result["us"] = acc_id
+                    logger.info(f"无 trdmarket_auth 信息，使用任意账户 US acc_id={acc_id}")
+
+        logger.info(f"最终使用账户 HK={result['hk']} US={result['us']} (0=OpenD默认)")
         return result
 
     def get_positions(self) -> List[Dict[str, Any]]:
@@ -148,15 +173,9 @@ class FutuBroker:
         positions = []
         try:
             acc_info = self._get_acc_info()
-            if acc_info["hk"]:
-                positions.extend(self._fetch_positions_hk(acc_id=acc_info["hk"]))
-            else:
-                logger.info("无港股账户，跳过港股持仓查询")
-
-            if acc_info["us"]:
-                positions.extend(self._fetch_positions_us(acc_id=acc_info["us"]))
-            else:
-                logger.info("无美股账户，跳过美股持仓查询")
+            # 无论是否找到 acc_id，都尝试查询（acc_id=0 表示 OpenD 默认账户）
+            positions.extend(self._fetch_positions_hk(acc_id=acc_info["hk"]))
+            positions.extend(self._fetch_positions_us(acc_id=acc_info["us"]))
         finally:
             self._close()
         return positions
@@ -266,18 +285,19 @@ class FutuBroker:
                 for row in acc_records:
                     is_real = self._is_real_env(row.get("trd_env"))
                     is_active = self._is_active(row.get("acc_status"))
-                    auth = row.get("trdmarket_auth", [])
-                    if isinstance(auth, str):
-                        auth = [auth]
+                    has_hk = self._has_market_auth(row, "HK")
+                    has_us = self._has_market_auth(row, "US")
                     acc_id = int(row.get("acc_id", 0))
 
                     row["_is_real"] = is_real
                     row["_is_active"] = is_active
+                    row["_has_hk_auth"] = has_hk
+                    row["_has_us_auth"] = has_us
 
                     if is_real and is_active:
-                        if "HK" in auth and hk_acc_id is None:
+                        if has_hk and hk_acc_id is None:
                             hk_acc_id = acc_id
-                        if "US" in auth and us_acc_id is None:
+                        if has_us and us_acc_id is None:
                             us_acc_id = acc_id
 
             result["acc_list"] = {
