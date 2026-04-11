@@ -99,10 +99,11 @@ class FutuBroker:
     # 公开接口
     # ─────────────────────────────────────────────────────────
 
-    def get_positions(self) -> List[Dict[str, Any]]:
-        """获取所有真实账户持仓（港股 + 美股），遍历所有 SecurityFirm"""
+    def get_positions(self) -> Dict[str, Any]:
+        """获取所有真实账户持仓（港股 + 美股）和现金，在同一次连接里完成"""
         ft = self._import_futu()
         all_positions: List[Dict[str, Any]] = []
+        cash_info: Dict[str, Any] = {"amount": 0.0, "currency": "HKD"}
         seen_acc_ids = set()
 
         for firm in self._all_security_firms(ft):
@@ -128,19 +129,42 @@ class FutuBroker:
                     auth = self._parse_trdmarket_auth(row.get("trdmarket_auth"))
                     logger.info(f"找到真实账户 acc_id={acc_id} trdmarket_auth={auth} firm={self._format_enum(firm)}")
 
-                    # 查询该账户的持仓
+                    # 查询持仓
                     ret2, pos_data = ctx.position_list_query(
                         trd_env=ft.TrdEnv.REAL, acc_id=acc_id
                     )
                     if ret2 != ft.RET_OK:
                         logger.warning(f"账户 {acc_id} 持仓查询失败: {pos_data}")
                         continue
-                    if pos_data is None or pos_data.empty:
-                        logger.info(f"账户 {acc_id} 持仓为空")
-                        continue
+                    if pos_data is not None and not pos_data.empty:
+                        positions = self._parse_positions(pos_data)
+                        logger.info(f"账户 {acc_id} 持仓 {len(positions)} 条")
+                        all_positions.extend(positions)
 
-                    positions = self._parse_positions(pos_data)
-                    logger.info(f"账户 {acc_id} 持仓 {len(positions)} 条")
+                    # 同一连接里查现金
+                    ret3, acc_data = ctx.accinfo_query(trd_env=ft.TrdEnv.REAL, acc_id=acc_id)
+                    if ret3 == ft.RET_OK and acc_data is not None and not acc_data.empty:
+                        r = acc_data.iloc[0]
+                        cash = self._safe_float(r.get("cash", 0))
+                        currency_raw = r.get("currency", "HKD")
+                        currency = self._format_enum(currency_raw) if currency_raw else "HKD"
+                        # currency 可能是 "Currency.HKD" 格式，取最后一段
+                        if "." in str(currency):
+                            currency = str(currency).split(".")[-1]
+                        cash_info = {"amount": cash, "currency": currency}
+                        logger.info(f"账户 {acc_id} 现金 {cash} {currency}")
+
+            except Exception as e:
+                logger.debug(f"SecurityFirm={self._format_enum(firm)} 查询跳过: {e}")
+            finally:
+                if ctx:
+                    try:
+                        ctx.close()
+                    except Exception:
+                        pass
+
+        logger.info(f"富途总持仓: {len(all_positions)} 条，现金: {cash_info}")
+        return {"positions": all_positions, "cash": cash_info}
                     all_positions.extend(positions)
 
             except Exception as e:
@@ -198,44 +222,6 @@ class FutuBroker:
                 "broker": "futu",
             })
         return result
-
-    def get_cash_balance(self) -> Dict[str, Any]:
-        """获取账户现金余额"""
-        ft = self._import_futu()
-        for firm in self._all_security_firms(ft):
-            ctx = None
-            try:
-                ctx = self._create_ctx(ft, security_firm=firm)
-                ret, acc_list = ctx.get_acc_list()
-                if ret != ft.RET_OK or acc_list is None or acc_list.empty:
-                    continue
-                for i in range(len(acc_list)):
-                    row = acc_list.iloc[i]
-                    acc_id = self._safe_int(row.get("acc_id", 0))
-                    if acc_id == 0:
-                        continue
-                    if not self._is_real(row.get("trd_env")):
-                        continue
-                    if not self._is_active(row.get("acc_status")):
-                        continue
-                    ret2, acc_data = ctx.accinfo_query(trd_env=ft.TrdEnv.REAL, acc_id=acc_id)
-                    if ret2 != ft.RET_OK or acc_data is None or acc_data.empty:
-                        continue
-                    r = acc_data.iloc[0]
-                    cash = self._safe_float(r.get("cash", 0))
-                    currency_raw = r.get("currency", "")
-                    currency = self._format_enum(currency_raw) if currency_raw else "HKD"
-                    logger.info(f"Futu 现金余额 {cash} {currency}")
-                    return {"amount": cash, "currency": currency}
-            except Exception as e:
-                logger.debug(f"get_cash_balance firm={self._format_enum(firm)}: {e}")
-            finally:
-                if ctx:
-                    try:
-                        ctx.close()
-                    except Exception:
-                        pass
-        return {"amount": 0.0, "currency": "HKD"}
 
     def debug_raw(self) -> Dict[str, Any]:
         """返回原始 API 数据，用于排查问题"""

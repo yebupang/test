@@ -59,11 +59,10 @@ class IBBroker:
         except Exception:
             pass
 
-    def get_positions(self) -> List[Dict[str, Any]]:
-        """获取盈透所有持仓"""
+    def get_positions(self) -> Dict[str, Any]:
+        """获取盈透所有持仓和现金，在同一次连接里完成"""
         self._connect()
         try:
-            from ib_insync import util
             positions = self._ib.positions()
             account_values = self._ib.accountValues()
 
@@ -79,10 +78,8 @@ class IBBroker:
             for pos in positions:
                 contract = pos.contract
                 symbol = contract.symbol
-                sec_type = contract.secType  # STK, OPT, FUT, ...
-
-                if sec_type != "STK":
-                    continue  # 当前只处理股票
+                if contract.secType != "STK":
+                    continue
 
                 market = self._detect_market(contract)
                 currency = contract.currency or "USD"
@@ -107,8 +104,22 @@ class IBBroker:
                     "broker": "ib",
                 })
 
-            logger.info(f"IB 持仓: {len(result)} 条")
-            return result
+            # 同一连接里取现金（BASE 是折算后的账户基础货币）
+            cash_amount = 0.0
+            cash_currency = "USD"
+            for v in account_values:
+                if v.tag == "TotalCashValue" and v.currency == "BASE":
+                    cash_amount = float(v.value or 0)
+                    break
+            if cash_amount == 0:
+                for v in account_values:
+                    if v.tag == "TotalCashValue":
+                        cash_amount = float(v.value or 0)
+                        cash_currency = v.currency or "USD"
+                        break
+
+            logger.info(f"IB 持仓: {len(result)} 条，现金: {cash_amount} {cash_currency}")
+            return {"positions": result, "cash": {"amount": cash_amount, "currency": cash_currency}}
         finally:
             self._disconnect()
 
@@ -122,23 +133,6 @@ class IBBroker:
         if currency in ("CNY", "CNH") or "SEHK" in exchange:
             return "A"
         return "US"  # 默认美股
-
-    def get_cash_balance(self) -> Dict[str, Any]:
-        """获取账户现金余额"""
-        self._connect()
-        try:
-            values = self._ib.accountValues()
-            # TotalCashValue 是各币种现金折算后的总现金（账户基础货币）
-            for v in values:
-                if v.tag == "TotalCashValue" and v.currency == "BASE":
-                    return {"amount": float(v.value or 0), "currency": "USD"}
-            # 如果没有 BASE，取第一个 TotalCashValue
-            for v in values:
-                if v.tag == "TotalCashValue":
-                    return {"amount": float(v.value or 0), "currency": v.currency or "USD"}
-            return {"amount": 0.0, "currency": "USD"}
-        finally:
-            self._disconnect()
 
     def get_account_summary(self) -> Dict[str, Any]:
         """获取账户资产汇总"""

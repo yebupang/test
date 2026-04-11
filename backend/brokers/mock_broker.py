@@ -65,8 +65,11 @@ MOCK_WATCHLIST = [
 ]
 
 
-def get_mock_positions() -> List[Dict[str, Any]]:
-    return MOCK_POSITIONS.copy()
+def get_mock_positions() -> Dict[str, Any]:
+    return {
+        "positions": MOCK_POSITIONS.copy(),
+        "cash": {"amount": 12500.0, "currency": "USD"},
+    }
 
 
 def get_mock_watchlist() -> List[Dict[str, Any]]:

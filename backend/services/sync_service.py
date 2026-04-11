@@ -21,99 +21,67 @@ class SyncService:
         self.db = db
         self.market_data = MarketDataService()
 
-    async def sync_futu(self, account_id: int) -> Dict[str, Any]:
-        """同步富途账户持仓"""
-        log = SyncLog(broker="futu", status="running", started_at=datetime.utcnow())
+    async def _sync_broker(self, broker_name: str, account_id: int, broker_fn) -> Dict[str, Any]:
+        """通用 broker 同步逻辑：调用 broker_fn() 获取 {positions, cash}，写入数据库"""
+        log = SyncLog(broker=broker_name, status="running", started_at=datetime.utcnow())
         self.db.add(log)
         await self.db.commit()
-
         try:
-            from brokers.futu_broker import FutuBroker
-            broker = FutuBroker(
-                host=settings.futu_host,
-                port=settings.futu_port,
-                trade_pwd=settings.futu_trade_pwd,
-            )
             loop = asyncio.get_event_loop()
-            positions_data = await asyncio.wait_for(
-                loop.run_in_executor(None, broker.get_positions),
-                timeout=30.0,
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, broker_fn),
+                timeout=45.0,
             )
-            count = await self._upsert_positions(account_id, positions_data)
+            positions_data = result.get("positions", result) if isinstance(result, dict) else result
+            cash_data = result.get("cash") if isinstance(result, dict) else None
 
-            try:
-                cash_data = await asyncio.wait_for(
-                    loop.run_in_executor(None, broker.get_cash_balance),
-                    timeout=15.0,
-                )
+            count = await self._upsert_positions(account_id, positions_data)
+            if cash_data:
                 await self._update_cash(account_id, cash_data)
-            except Exception as e:
-                logger.warning(f"富途现金同步失败（不影响持仓）: {e}")
 
             log.status = "success"
             log.positions_updated = count
-            log.message = f"成功同步 {count} 条持仓"
+            log.message = f"成功同步 {count} 条持仓" + (f"，现金 {cash_data['amount']:.0f} {cash_data['currency']}" if cash_data else "")
             log.finished_at = datetime.utcnow()
             await self.db.commit()
             return {"status": "success", "positions_updated": count}
-
         except Exception as e:
             log.status = "failed"
             log.message = str(e)
             log.finished_at = datetime.utcnow()
             await self.db.commit()
-            logger.error(f"富途同步失败: {e}")
+            logger.error(f"{broker_name} 同步失败: {e}")
             raise
+
+    async def sync_futu(self, account_id: int) -> Dict[str, Any]:
+        """同步富途账户持仓"""
+        from brokers.futu_broker import FutuBroker
+        broker = FutuBroker(
+            host=settings.futu_host,
+            port=settings.futu_port,
+            trade_pwd=settings.futu_trade_pwd,
+        )
+        return await self._sync_broker("futu", account_id, broker.get_positions)
 
     async def sync_ib(self, account_id: int) -> Dict[str, Any]:
         """同步盈透账户持仓"""
-        log = SyncLog(broker="ib", status="running", started_at=datetime.utcnow())
-        self.db.add(log)
-        await self.db.commit()
-
-        try:
-            from brokers.ib_broker import IBBroker
-            broker = IBBroker(
-                host=settings.ib_host,
-                port=settings.ib_port,
-                client_id=settings.ib_client_id,
-            )
-            loop = asyncio.get_event_loop()
-            positions_data = await asyncio.wait_for(
-                loop.run_in_executor(None, broker.get_positions),
-                timeout=30.0,
-            )
-            count = await self._upsert_positions(account_id, positions_data)
-
-            try:
-                cash_data = await asyncio.wait_for(
-                    loop.run_in_executor(None, broker.get_cash_balance),
-                    timeout=15.0,
-                )
-                await self._update_cash(account_id, cash_data)
-            except Exception as e:
-                logger.warning(f"IB 现金同步失败（不影响持仓）: {e}")
-
-            log.status = "success"
-            log.positions_updated = count
-            log.message = f"成功同步 {count} 条持仓"
-            log.finished_at = datetime.utcnow()
-            await self.db.commit()
-            return {"status": "success", "positions_updated": count}
-
-        except Exception as e:
-            log.status = "failed"
-            log.message = str(e)
-            log.finished_at = datetime.utcnow()
-            await self.db.commit()
-            logger.error(f"IB 同步失败: {e}")
-            raise
+        from brokers.ib_broker import IBBroker
+        broker = IBBroker(
+            host=settings.ib_host,
+            port=settings.ib_port,
+            client_id=settings.ib_client_id,
+        )
+        return await self._sync_broker("ib", account_id, broker.get_positions)
 
     async def sync_mock(self, account_id: int) -> Dict[str, Any]:
         """加载模拟数据（开发测试用）"""
         from brokers.mock_broker import get_mock_positions
-        positions_data = get_mock_positions()
+        result = get_mock_positions()
+        positions_data = result.get("positions", result) if isinstance(result, dict) else result
+        cash_data = result.get("cash") if isinstance(result, dict) else None
         count = await self._upsert_positions(account_id, positions_data)
+        if cash_data:
+            await self._update_cash(account_id, cash_data)
         return {"status": "success", "positions_updated": count}
 
     async def sync_csv(self, account_id: int, csv_content: bytes) -> Dict[str, Any]:
