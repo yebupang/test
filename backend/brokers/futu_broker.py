@@ -165,19 +165,6 @@ class FutuBroker:
 
         logger.info(f"富途总持仓: {len(all_positions)} 条，现金: {cash_info}")
         return {"positions": all_positions, "cash": cash_info}
-                    all_positions.extend(positions)
-
-            except Exception as e:
-                logger.debug(f"SecurityFirm={self._format_enum(firm)} 查询跳过: {e}")
-            finally:
-                if ctx:
-                    try:
-                        ctx.close()
-                    except Exception:
-                        pass
-
-        logger.info(f"富途总持仓: {len(all_positions)} 条")
-        return all_positions
 
     def _parse_positions(self, pos_data) -> List[Dict[str, Any]]:
         """解析持仓 DataFrame，使用官方推荐字段名"""
