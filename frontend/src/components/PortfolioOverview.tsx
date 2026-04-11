@@ -19,10 +19,17 @@ const TYPE_COLORS: Record<string, string> = {
   unclassified: "#6b7280",
 };
 
-function fmt(n: number) {
-  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toFixed(2);
+function fmtCny(n: number) {
+  if (Math.abs(n) >= 1_000_000) return `¥${(n / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(n) >= 10_000) return `¥${(n / 10_000).toFixed(1)}万`;
+  return `¥${n.toFixed(0)}`;
+}
+
+function fmtRaw(n: number, currency = "USD") {
+  const sym = currency === "HKD" ? "HK$" : currency === "CNY" ? "¥" : "$";
+  if (Math.abs(n) >= 1_000_000) return `${sym}${(n / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(n) >= 1_000) return `${sym}${(n / 1_000).toFixed(1)}K`;
+  return `${sym}${n.toFixed(0)}`;
 }
 
 interface Props {
@@ -30,35 +37,47 @@ interface Props {
 }
 
 export default function PortfolioOverview({ data }: Props) {
+  const fx = data.exchange_rates ?? {};
+  const usdRate = fx["USD"] ?? 7.24;
+  const hkdRate = fx["HKD"] ?? 0.93;
+
   const marketPie = Object.entries(data.by_market).map(([key, val]) => ({
     name: MARKET_LABELS[key as keyof typeof MARKET_LABELS] || key,
-    value: val.market_value,
+    value: val.market_value_cny ?? val.market_value,
     pct: val.pct,
     key,
   }));
 
   const typePie = Object.entries(data.by_position_type).map(([key, val]) => ({
     name: POSITION_TYPE_LABELS[key] || key,
-    value: val.market_value,
+    value: val.market_value_cny ?? val.market_value,
     pct: val.pct,
     key,
   }));
 
   const equityRatio = data.equity_ratio ?? 0;
-  const cashRatio = Math.max(0, 100 - equityRatio);
-  const hasCash = data.total_cash > 0;
+  const hasCash = data.total_cash_cny > 0;
 
   return (
     <div className="space-y-4">
       {/* 总资产卡片 */}
       <div className="bg-card p-4 md:p-6">
-        <p className="text-xs text-gray-400 mb-1">总资产{hasCash ? "（股票 + 现金）" : ""}</p>
-        <p className="text-3xl font-bold font-mono">
-          ${fmt(hasCash ? data.total_assets : data.total_market_value)}
-        </p>
-        <div className="flex items-center gap-3 mt-2">
-          <PnlBadge value={data.total_pnl} suffix="" />
-          <PnlBadge value={data.total_pnl_pct} />
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs text-gray-400 mb-1">总资产（人民币）</p>
+            <p className="text-3xl font-bold font-mono">
+              {fmtCny(data.total_assets_cny)}
+            </p>
+            <div className="flex items-center gap-3 mt-2">
+              <PnlBadge value={data.total_pnl_cny} suffix="" prefix="¥" />
+              <PnlBadge value={data.total_pnl_pct} />
+            </div>
+          </div>
+          {/* 汇率 */}
+          <div className="text-right text-xs text-gray-500 space-y-1">
+            <div>1 USD = <span className="text-gray-300">{usdRate.toFixed(4)}</span> CNY</div>
+            <div>1 HKD = <span className="text-gray-300">{hkdRate.toFixed(4)}</span> CNY</div>
+          </div>
         </div>
 
         {/* 仓位进度条 */}
@@ -74,10 +93,8 @@ export default function PortfolioOverview({ data }: Props) {
             />
           </div>
           <div className="flex justify-between text-xs mt-1">
-            <span className="text-indigo-400">股票 ${fmt(data.total_market_value)}</span>
-            {hasCash && (
-              <span className="text-gray-400">现金 ${fmt(data.total_cash)}</span>
-            )}
+            <span className="text-indigo-400">股票 {fmtCny(data.total_market_value_cny)}</span>
+            {hasCash && <span className="text-gray-400">现金 {fmtCny(data.total_cash_cny)}</span>}
           </div>
         </div>
       </div>
@@ -85,9 +102,9 @@ export default function PortfolioOverview({ data }: Props) {
       {/* 指标卡片行 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: "股票市值", value: `$${fmt(data.total_market_value)}` },
-          { label: "总成本", value: `$${fmt(data.total_cost)}` },
-          { label: "浮动盈亏", value: <PnlBadge value={data.total_pnl} suffix="" /> },
+          { label: "股票市值", value: fmtCny(data.total_market_value_cny) },
+          { label: "总成本", value: fmtCny(data.total_cost_cny) },
+          { label: "浮动盈亏", value: <PnlBadge value={data.total_pnl_cny} suffix="" prefix="¥" /> },
           { label: "持仓股数", value: data.accounts.reduce((s, a) => s + a.positions.length, 0) },
         ].map((item, i) => (
           <div key={i} className="bg-card p-3 md:p-4">
@@ -105,19 +122,15 @@ export default function PortfolioOverview({ data }: Props) {
             {data.accounts.map((acc) => (
               <div key={acc.account.id} className="flex items-center justify-between text-sm">
                 <span className="text-gray-300">{acc.account.name}</span>
-                <div className="flex items-center gap-4">
-                  <span className="text-gray-400">
-                    {acc.cash_currency} {fmt(acc.cash_balance)}
+                <div className="flex items-center gap-3">
+                  <span className="text-gray-400 font-mono">
+                    {fmtRaw(acc.cash_balance, acc.cash_currency)}
+                    <span className="text-gray-600 ml-1">≈ {fmtCny(acc.total_assets_cny - acc.total_market_value * (acc.equity_ratio / 100))}</span>
                   </span>
-                  <div className="w-24 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-indigo-500 rounded-full"
-                      style={{ width: `${acc.equity_ratio}%` }}
-                    />
+                  <div className="w-20 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${acc.equity_ratio}%` }} />
                   </div>
-                  <span className="text-xs text-gray-400 w-16 text-right">
-                    股{acc.equity_ratio}% / 金{Math.max(0, 100 - acc.equity_ratio).toFixed(1)}%
-                  </span>
+                  <span className="text-xs text-gray-500 w-10">{acc.equity_ratio}%仓</span>
                 </div>
               </div>
             ))}
@@ -129,23 +142,16 @@ export default function PortfolioOverview({ data }: Props) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* 市场分布 */}
         <div className="bg-card p-4">
-          <p className="text-sm text-gray-400 mb-3">市场分布</p>
+          <p className="text-sm text-gray-400 mb-3">市场分布（人民币）</p>
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
-              <Pie
-                data={marketPie}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={70}
-                label={({ name, pct }) => `${name} ${pct}%`}
-              >
+              <Pie data={marketPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70}
+                label={({ name, pct }) => `${name} ${pct}%`}>
                 {marketPie.map((entry) => (
                   <Cell key={entry.key} fill={MARKET_COLORS[entry.key] || "#888"} />
                 ))}
               </Pie>
-              <Tooltip formatter={(v: number) => `$${fmt(v)}`} />
+              <Tooltip formatter={(v: number) => fmtCny(v)} />
             </PieChart>
           </ResponsiveContainer>
           <div className="grid grid-cols-3 gap-2 mt-2">
@@ -153,7 +159,7 @@ export default function PortfolioOverview({ data }: Props) {
               <div key={key} className="text-center">
                 <div className="text-xs text-gray-400">{MARKET_LABELS[key as keyof typeof MARKET_LABELS] || key}</div>
                 <div className="text-sm font-semibold">{val.pct}%</div>
-                <PnlBadge value={val.pnl} suffix="" className="text-xs" />
+                <PnlBadge value={val.pnl_cny ?? val.pnl} suffix="" prefix="¥" className="text-xs" />
               </div>
             ))}
           </div>
@@ -164,26 +170,17 @@ export default function PortfolioOverview({ data }: Props) {
           <p className="text-sm text-gray-400 mb-3">仓位类型分布</p>
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
-              <Pie
-                data={typePie}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={70}
-                label={({ name, pct }) => `${name} ${pct}%`}
-              >
+              <Pie data={typePie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70}
+                label={({ name, pct }) => `${name} ${pct}%`}>
                 {typePie.map((entry) => (
                   <Cell key={entry.key} fill={TYPE_COLORS[entry.key] || "#888"} />
                 ))}
               </Pie>
-              <Tooltip formatter={(v: number) => `$${fmt(v)}`} />
+              <Tooltip formatter={(v: number) => fmtCny(v)} />
             </PieChart>
           </ResponsiveContainer>
           {typePie.length === 0 && (
-            <p className="text-center text-gray-500 text-sm mt-4">
-              尚未分类仓位，在持仓列表中可设置
-            </p>
+            <p className="text-center text-gray-500 text-sm mt-4">尚未分类仓位，在持仓列表中可设置</p>
           )}
         </div>
       </div>

@@ -86,6 +86,7 @@ export interface AccountSummary {
   cash_currency: string;
   total_assets: number;
   equity_ratio: number;
+  total_assets_cny: number;
 }
 
 export interface PortfolioSummary {
@@ -97,8 +98,14 @@ export interface PortfolioSummary {
   total_cash: number;
   total_assets: number;
   equity_ratio: number;
-  by_market: Record<string, { market_value: number; count: number; pnl: number; pct: number }>;
-  by_position_type: Record<string, { market_value: number; count: number; pct: number }>;
+  total_market_value_cny: number;
+  total_cost_cny: number;
+  total_pnl_cny: number;
+  total_cash_cny: number;
+  total_assets_cny: number;
+  exchange_rates: Record<string, number>;
+  by_market: Record<string, { market_value: number; market_value_cny: number; count: number; pnl: number; pnl_cny: number; pct: number }>;
+  by_position_type: Record<string, { market_value: number; market_value_cny: number; count: number; pct: number }>;
 }
 
 export interface WatchListItem {

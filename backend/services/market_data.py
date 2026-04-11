@@ -7,11 +7,17 @@ AKShare 是免费的 A股/港股/美股 行情数据库
 
 import logging
 import asyncio
+import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# 汇率缓存（模块级别，5 分钟 TTL）
+_FX_CACHE: Dict[str, float] = {}
+_FX_CACHE_TS: float = 0
+_FX_CACHE_TTL = 300  # 5 分钟
 
 
 class MarketDataService:
@@ -219,6 +225,95 @@ class MarketDataService:
         except Exception as e:
             logger.warning(f"历史数据获取失败 {symbol}: {e}")
             return []
+
+    async def get_exchange_rates(self) -> Dict[str, float]:
+        """
+        获取对人民币汇率：{"USD": 7.24, "HKD": 0.93, "CNY": 1.0}
+        优先从富途 OpenD 获取实时报价，失败则降级到 AKShare，再失败用近似值。
+        结果缓存 5 分钟，避免频繁请求。
+        """
+        global _FX_CACHE, _FX_CACHE_TS
+        if _FX_CACHE and time.time() - _FX_CACHE_TS < _FX_CACHE_TTL:
+            return _FX_CACHE
+
+        rates = await self._fetch_fx_futu()
+        if not rates:
+            rates = await self._fetch_fx_akshare()
+        if not rates:
+            rates = {}
+
+        result = {
+            "CNY": 1.0,
+            "USD": rates.get("USD", 7.24),
+            "HKD": rates.get("HKD", 0.93),
+        }
+        _FX_CACHE = result
+        _FX_CACHE_TS = time.time()
+        logger.info(f"汇率更新: {result}")
+        return result
+
+    async def _fetch_fx_futu(self) -> Dict[str, float]:
+        """通过富途 OpenD 行情接口获取实时汇率"""
+        try:
+            from config import get_settings
+            settings = get_settings()
+
+            def _get():
+                import futu as ft
+                ctx = ft.OpenQuoteContext(host=settings.futu_host, port=settings.futu_port)
+                try:
+                    # 富途外汇代码格式：FX.USDCNY / FX.HKDCNY
+                    ret, data = ctx.get_market_snapshot(["FX.USDCNY", "FX.HKDCNY"])
+                    if ret != ft.RET_OK or data is None or data.empty:
+                        return {}
+                    result = {}
+                    for _, row in data.iterrows():
+                        code = str(row.get("code", ""))
+                        price = float(row.get("last_price", 0) or 0)
+                        if price > 0:
+                            if "USDCNY" in code:
+                                result["USD"] = price
+                            elif "HKDCNY" in code:
+                                result["HKD"] = price
+                    return result
+                finally:
+                    ctx.close()
+
+            rates = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, _get),
+                timeout=8.0,
+            )
+            if rates:
+                logger.info(f"富途汇率: {rates}")
+            return rates
+        except Exception as e:
+            logger.debug(f"富途汇率获取失败: {e}")
+            return {}
+
+    async def _fetch_fx_akshare(self) -> Dict[str, float]:
+        """通过 AKShare 获取汇率（备用）"""
+        try:
+            import akshare as ak
+            result = {}
+            for pair, key in [("USDCNY", "USD"), ("HKDCNY", "HKD")]:
+                try:
+                    df = await asyncio.to_thread(
+                        ak.currency_pair_realtime, symbol=pair
+                    )
+                    if df is not None and not df.empty:
+                        price = float(df.iloc[-1].get("买入价", 0) or df.iloc[-1].iloc[-1] or 0)
+                        if price > 0:
+                            result[key] = price
+                except Exception as e:
+                    logger.debug(f"AKShare {pair} 失败: {e}")
+            return result
+        except Exception as e:
+            logger.debug(f"AKShare 汇率获取失败: {e}")
+            return {}
+
+    def to_cny(self, amount: float, currency: str, rates: Dict[str, float]) -> float:
+        """将金额按给定汇率换算为人民币"""
+        return amount * rates.get(currency.upper(), 1.0)
 
     def _safe_float(self, val) -> Optional[float]:
         try:
