@@ -163,8 +163,80 @@ class FutuBroker:
                     except Exception:
                         pass
 
+        # position_list_query 不含 stock_type，需要额外调用 get_market_snapshot 补充
+        if all_positions:
+            all_positions = self._enrich_with_stock_type(ft, all_positions)
+
         logger.info(f"富途总持仓: {len(all_positions)} 条，现金: {cash_info}")
         return {"positions": all_positions, "cash": cash_info}
+
+    def _enrich_with_stock_type(self, ft, positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        通过 get_market_snapshot 批量获取每个持仓的证券类型（stock_type），
+        精确判断是否为货币基金。
+
+        position_list_query 不包含 stock_type，必须通过行情快照接口补充。
+        参考：opend-skills/skills/futuapi/scripts/quote/get_stock_info.py
+        """
+        # 提取所有有效 code（格式：MARKET.SYMBOL）
+        codes: List[str] = []
+        seen_codes: set = set()
+        for p in positions:
+            market = p.get("market", "")
+            symbol = p.get("symbol", "")
+            if market and symbol:
+                code = f"{market}.{symbol}"
+                if code not in seen_codes:
+                    codes.append(code)
+                    seen_codes.add(code)
+
+        if not codes:
+            return positions
+
+        stock_type_map: Dict[str, str] = {}
+        quote_ctx = None
+        try:
+            quote_ctx = ft.OpenQuoteContext(host=self.host, port=self.port)
+            # 每次最多 200 个（官方文档限制：每次请求上限 400，保守用 200）
+            for start in range(0, len(codes), 200):
+                batch = codes[start:start + 200]
+                ret, data = quote_ctx.get_market_snapshot(batch)
+                if ret != ft.RET_OK or data is None or data.empty:
+                    logger.warning(f"get_market_snapshot 失败: {data}")
+                    continue
+                for _, row in data.iterrows():
+                    code = str(row.get("code", ""))
+                    # 字段名为 stock_type，sec_type 为历史别名（参考 get_stock_info.py）
+                    st = self._format_enum(
+                        row.get("stock_type") or row.get("sec_type") or ""
+                    )
+                    if code:
+                        stock_type_map[code] = st
+        except Exception as e:
+            logger.warning(f"批量获取证券类型失败，回退到名称匹配: {e}")
+        finally:
+            if quote_ctx:
+                try:
+                    quote_ctx.close()
+                except Exception:
+                    pass
+
+        # 用准确的 stock_type 更新每个持仓的 is_cash_equivalent
+        fund_count = 0
+        for p in positions:
+            code = f"{p.get('market', '')}.{p.get('symbol', '')}"
+            stock_type = stock_type_map.get(code, "")
+            p["stock_type"] = stock_type
+            p["is_cash_equivalent"] = self._is_money_market_fund(stock_type, p.get("name", ""))
+            if p["is_cash_equivalent"]:
+                fund_count += 1
+                logger.info(
+                    f"识别为货币基金: {code} {p.get('name')!r} "
+                    f"stock_type={stock_type!r} market_val={p.get('market_value')}"
+                )
+
+        logger.info(f"证券类型查询完成，共识别货币基金 {fund_count} 条（持仓总 {len(positions)} 条）")
+        return positions
 
     # 货币基金名称关键词（中英文，不区分大小写）
     _MMF_NAME_KEYWORDS = (
@@ -229,9 +301,8 @@ class FutuBroker:
             currency = currency_map.get(market, "")
 
             name = str(row.get("stock_name", ""))
-            # 注意：Futu API 返回的字段名是 stock_type，不是 sec_type
-            stock_type = self._format_enum(row.get("stock_type", row.get("sec_type", "")))
-
+            # position_list_query 不含 stock_type，此处用名称初步判断；
+            # get_positions() 会再调 _enrich_with_stock_type() 以 snapshot 结果覆盖
             qty = self._safe_float(row.get("qty", 0))
             # 官方推荐 average_cost（均价），禁止用 cost_price（摊薄成本）
             cost = self._safe_float(row.get("average_cost", 0))
@@ -244,9 +315,8 @@ class FutuBroker:
             pnl = self._safe_float(row.get("unrealized_pl", 0))
             pnl_pct = self._safe_float(row.get("pl_ratio_avg_cost", 0))
 
-            is_cash_equiv = self._is_money_market_fund(stock_type, name)
-            if is_cash_equiv:
-                logger.info(f"识别为货币基金（计入现金）: {symbol} {name!r} stock_type={stock_type!r}")
+            # 名称初步判断（stock_type 为空，仅靠名称关键词做第一次猜测）
+            is_cash_equiv = self._is_money_market_fund("", name)
 
             result.append({
                 "symbol": symbol,
@@ -323,10 +393,16 @@ class FutuBroker:
                                     }
                                     for j in range(len(pos_data))
                                 ]
-                                acc_entry["positions"] = self._parse_positions(pos_data)
-                                acc_entry["positions_count"] = len(acc_entry["positions"])
+                                parsed = self._parse_positions(pos_data)
+                                # 用 snapshot 补充 stock_type（与 get_positions 逻辑一致）
+                                enriched = self._enrich_with_stock_type(ft, parsed)
+                                acc_entry["positions"] = enriched
+                                acc_entry["positions_count"] = len(enriched)
                                 acc_entry["fund_positions"] = [
-                                    p for p in acc_entry["positions"] if p.get("is_cash_equivalent")
+                                    {k: v for k, v in p.items() if k in
+                                     ("symbol", "name", "market", "currency",
+                                      "market_value", "stock_type", "is_cash_equivalent")}
+                                    for p in enriched if p.get("is_cash_equivalent")
                                 ]
                             else:
                                 acc_entry["positions"] = []
