@@ -86,6 +86,7 @@ export interface AccountSummary {
   cash_currency: string;
   total_assets: number;
   equity_ratio: number;
+  total_market_value_cny: number;
   total_assets_cny: number;
 }
 

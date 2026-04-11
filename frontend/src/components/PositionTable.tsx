@@ -18,11 +18,34 @@ const POSITION_TYPES = [
   { value: "speculative", label: "投机" },
 ];
 
+function currSym(currency?: string) {
+  if (currency === "HKD") return "HK$";
+  if (currency === "CNY") return "¥";
+  return "$"; // USD default
+}
+
 function fmt(n?: number, digits = 2) {
   if (n == null) return "—";
   if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return n.toFixed(digits);
+}
+
+function fmtPrice(n?: number, currency?: string) {
+  if (n == null) return "—";
+  const sym = currSym(currency);
+  if (Math.abs(n) >= 1_000_000) return `${sym}${(n / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(n) >= 1_000) return `${sym}${(n / 1_000).toFixed(1)}K`;
+  return `${sym}${n.toFixed(2)}`;
+}
+
+function fmtMv(n?: number, currency?: string) {
+  if (n == null) return "—";
+  const sym = currSym(currency);
+  if (Math.abs(n) >= 1_000_000) return `${sym}${(n / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(n) >= 10_000) return `${sym}${(n / 10_000).toFixed(1)}万`;
+  if (Math.abs(n) >= 1_000) return `${sym}${(n / 1_000).toFixed(1)}K`;
+  return `${sym}${n.toFixed(0)}`;
 }
 
 export default function PositionTable({ positions, onUpdated }: Props) {
@@ -104,12 +127,12 @@ export default function PositionTable({ positions, onUpdated }: Props) {
                 <td className="py-3 pr-4">
                   <span className="text-xs text-gray-400">{MARKET_LABELS[pos.market]}</span>
                 </td>
-                <td className="py-3 pr-4 text-right font-mono">{fmt(pos.current_price)}</td>
+                <td className="py-3 pr-4 text-right font-mono">{fmtPrice(pos.current_price, pos.currency)}</td>
                 <td className="py-3 pr-4 text-right">
                   <PnlBadge value={pos.change_pct ?? 0} />
                 </td>
                 <td className="py-3 pr-4 text-right font-mono text-gray-300">{fmt(pos.quantity, 0)}</td>
-                <td className="py-3 pr-4 text-right font-mono">{fmt(pos.market_value)}</td>
+                <td className="py-3 pr-4 text-right font-mono">{fmtMv(pos.market_value, pos.currency)}</td>
                 <td className="py-3 pr-4 text-right">
                   <PnlBadge value={pos.unrealized_pnl_pct} />
                 </td>
@@ -183,7 +206,7 @@ export default function PositionTable({ positions, onUpdated }: Props) {
             <div className="grid grid-cols-3 gap-2 text-sm">
               <div>
                 <p className="text-gray-500 text-xs">现价</p>
-                <p className="font-mono">{fmt(pos.current_price)}</p>
+                <p className="font-mono">{fmtPrice(pos.current_price, pos.currency)}</p>
               </div>
               <div>
                 <p className="text-gray-500 text-xs">今日</p>
@@ -191,7 +214,7 @@ export default function PositionTable({ positions, onUpdated }: Props) {
               </div>
               <div>
                 <p className="text-gray-500 text-xs">市值</p>
-                <p className="font-mono">{fmt(pos.market_value)}</p>
+                <p className="font-mono">{fmtMv(pos.market_value, pos.currency)}</p>
               </div>
               <div>
                 <p className="text-gray-500 text-xs">盈亏%</p>

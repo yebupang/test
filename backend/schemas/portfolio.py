@@ -83,9 +83,10 @@ class AccountSummary(BaseModel):
     total_pnl_pct: float
     cash_balance: float = 0
     cash_currency: str = "USD"
-    total_assets: float = 0       # 股票市值 + 现金（原币）
-    equity_ratio: float = 0       # 仓位率（股票/总资产）
-    total_assets_cny: float = 0   # 总资产折算人民币
+    total_assets: float = 0            # 股票市值 + 现金（原币）
+    equity_ratio: float = 0            # 仓位率（股票/总资产）
+    total_market_value_cny: float = 0  # 股票市值折算人民币
+    total_assets_cny: float = 0        # 总资产折算人民币
 
 
 class PortfolioSummary(BaseModel):

@@ -68,6 +68,7 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
             cash_currency=acc_cash_currency,
             total_assets=acc_total_assets,
             equity_ratio=acc_equity_ratio,
+            total_market_value_cny=round(acc_mv_cny, 2),
             total_assets_cny=round(acc_total_assets_cny, 2),
         ))
 

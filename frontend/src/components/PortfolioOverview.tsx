@@ -19,17 +19,19 @@ const TYPE_COLORS: Record<string, string> = {
   unclassified: "#6b7280",
 };
 
+/** 人民币格式化 */
 function fmtCny(n: number) {
   if (Math.abs(n) >= 1_000_000) return `¥${(n / 1_000_000).toFixed(2)}M`;
   if (Math.abs(n) >= 10_000) return `¥${(n / 10_000).toFixed(1)}万`;
   return `¥${n.toFixed(0)}`;
 }
 
+/** 原币格式化，根据 currency 选择货币符号 */
 function fmtRaw(n: number, currency = "USD") {
   const sym = currency === "HKD" ? "HK$" : currency === "CNY" ? "¥" : "$";
   if (Math.abs(n) >= 1_000_000) return `${sym}${(n / 1_000_000).toFixed(2)}M`;
   if (Math.abs(n) >= 1_000) return `${sym}${(n / 1_000).toFixed(1)}K`;
-  return `${sym}${n.toFixed(0)}`;
+  return `${sym}${n.toFixed(2)}`;
 }
 
 interface Props {
@@ -41,19 +43,24 @@ export default function PortfolioOverview({ data }: Props) {
   const usdRate = fx["USD"] ?? 7.24;
   const hkdRate = fx["HKD"] ?? 0.93;
 
-  const marketPie = Object.entries(data.by_market).map(([key, val]) => ({
-    name: MARKET_LABELS[key as keyof typeof MARKET_LABELS] || key,
-    value: val.market_value_cny ?? val.market_value,
-    pct: val.pct,
-    key,
-  }));
+  // 饼图数据均用 CNY 市值，确保图形比例与百分比一致
+  const marketPie = Object.entries(data.by_market)
+    .filter(([, val]) => (val.market_value_cny ?? val.market_value) > 0)
+    .map(([key, val]) => ({
+      name: MARKET_LABELS[key as keyof typeof MARKET_LABELS] || key,
+      value: val.market_value_cny,
+      pct: val.pct,
+      key,
+    }));
 
-  const typePie = Object.entries(data.by_position_type).map(([key, val]) => ({
-    name: POSITION_TYPE_LABELS[key] || key,
-    value: val.market_value_cny ?? val.market_value,
-    pct: val.pct,
-    key,
-  }));
+  const typePie = Object.entries(data.by_position_type)
+    .filter(([, val]) => (val.market_value_cny ?? val.market_value) > 0)
+    .map(([key, val]) => ({
+      name: POSITION_TYPE_LABELS[key] || key,
+      value: val.market_value_cny,
+      pct: val.pct,
+      key,
+    }));
 
   const equityRatio = data.equity_ratio ?? 0;
   const hasCash = data.total_cash_cny > 0;
@@ -73,7 +80,7 @@ export default function PortfolioOverview({ data }: Props) {
               <PnlBadge value={data.total_pnl_pct} />
             </div>
           </div>
-          {/* 汇率 */}
+          {/* 实时汇率 */}
           <div className="text-right text-xs text-gray-500 space-y-1">
             <div>1 USD = <span className="text-gray-300">{usdRate.toFixed(4)}</span> CNY</div>
             <div>1 HKD = <span className="text-gray-300">{hkdRate.toFixed(4)}</span> CNY</div>
@@ -102,10 +109,10 @@ export default function PortfolioOverview({ data }: Props) {
       {/* 指标卡片行 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: "股票市值", value: fmtCny(data.total_market_value_cny) },
-          { label: "总成本", value: fmtCny(data.total_cost_cny) },
-          { label: "浮动盈亏", value: <PnlBadge value={data.total_pnl_cny} suffix="" prefix="¥" /> },
-          { label: "持仓股数", value: data.accounts.reduce((s, a) => s + a.positions.length, 0) },
+          { label: "股票市值（¥）", value: fmtCny(data.total_market_value_cny) },
+          { label: "总成本（¥）",   value: fmtCny(data.total_cost_cny) },
+          { label: "浮动盈亏（¥）", value: <PnlBadge value={data.total_pnl_cny} suffix="" prefix="¥" /> },
+          { label: "持仓股数",       value: data.accounts.reduce((s, a) => s + a.positions.length, 0) },
         ].map((item, i) => (
           <div key={i} className="bg-card p-3 md:p-4">
             <p className="text-xs text-gray-400 mb-1">{item.label}</p>
@@ -117,23 +124,42 @@ export default function PortfolioOverview({ data }: Props) {
       {/* 各账户现金 */}
       {hasCash && (
         <div className="bg-card p-4">
-          <p className="text-sm text-gray-400 mb-3">各账户现金余额</p>
+          <p className="text-sm text-gray-400 mb-3">各账户资产明细</p>
           <div className="space-y-2">
-            {data.accounts.map((acc) => (
-              <div key={acc.account.id} className="flex items-center justify-between text-sm">
-                <span className="text-gray-300">{acc.account.name}</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-gray-400 font-mono">
-                    {fmtRaw(acc.cash_balance, acc.cash_currency)}
-                    <span className="text-gray-600 ml-1">≈ {fmtCny(acc.total_assets_cny - acc.total_market_value * (acc.equity_ratio / 100))}</span>
-                  </span>
-                  <div className="w-20 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${acc.equity_ratio}%` }} />
+            {data.accounts.map((acc) => {
+              // cash_cny = 总资产CNY - 股票市值CNY，完全基于CNY计算，无汇率混算
+              const cashCny = acc.total_assets_cny - acc.total_market_value_cny;
+              return (
+                <div key={acc.account.id} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-300">{acc.account.name}</span>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <div className="text-gray-300 font-mono text-xs">
+                        股票 {fmtCny(acc.total_market_value_cny)}
+                        {cashCny > 0 && (
+                          <span className="text-gray-500 ml-2">
+                            现金 {fmtRaw(acc.cash_balance, acc.cash_currency)}
+                            <span className="text-gray-600 ml-1">≈{fmtCny(cashCny)}</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-gray-500 text-xs">合计 {fmtCny(acc.total_assets_cny)}</div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                        <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${acc.equity_ratio}%` }} />
+                      </div>
+                      <span className="text-xs text-gray-500 w-10 text-right">{acc.equity_ratio}%仓</span>
+                    </div>
                   </div>
-                  <span className="text-xs text-gray-500 w-10">{acc.equity_ratio}%仓</span>
                 </div>
-              </div>
-            ))}
+              );
+            })}
+          </div>
+          {/* 汇总行 */}
+          <div className="mt-3 pt-3 border-t border-gray-800 flex justify-between text-sm">
+            <span className="text-gray-400">合计</span>
+            <span className="font-semibold font-mono">{fmtCny(data.total_assets_cny)}</span>
           </div>
         </div>
       )}
@@ -145,21 +171,43 @@ export default function PortfolioOverview({ data }: Props) {
           <p className="text-sm text-gray-400 mb-3">市场分布（人民币）</p>
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
-              <Pie data={marketPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70}
-                label={({ name, pct }) => `${name} ${pct}%`}>
+              <Pie
+                data={marketPie}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                outerRadius={70}
+                label={({ name, pct }) => `${name} ${pct}%`}
+                labelLine={false}
+              >
                 {marketPie.map((entry) => (
                   <Cell key={entry.key} fill={MARKET_COLORS[entry.key] || "#888"} />
                 ))}
               </Pie>
-              <Tooltip formatter={(v: number) => fmtCny(v)} />
+              <Tooltip
+                formatter={(v: number) => [fmtCny(v), "市值"]}
+                contentStyle={{ background: "#1f2937", border: "none", borderRadius: 6 }}
+                itemStyle={{ color: "#d1d5db" }}
+              />
             </PieChart>
           </ResponsiveContainer>
-          <div className="grid grid-cols-3 gap-2 mt-2">
+          {/* 市场明细：显示 CNY 市值 + 占比 + 盈亏 */}
+          <div className="space-y-1.5 mt-3">
             {Object.entries(data.by_market).map(([key, val]) => (
-              <div key={key} className="text-center">
-                <div className="text-xs text-gray-400">{MARKET_LABELS[key as keyof typeof MARKET_LABELS] || key}</div>
-                <div className="text-sm font-semibold">{val.pct}%</div>
-                <PnlBadge value={val.pnl_cny ?? val.pnl} suffix="" prefix="¥" className="text-xs" />
+              <div key={key} className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className="inline-block w-2 h-2 rounded-full"
+                    style={{ background: MARKET_COLORS[key] || "#888" }}
+                  />
+                  <span className="text-gray-300">{MARKET_LABELS[key as keyof typeof MARKET_LABELS] || key}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-gray-400 font-mono">{fmtCny(val.market_value_cny)}</span>
+                  <span className="text-gray-300 w-10 text-right font-semibold">{val.pct}%</span>
+                  <PnlBadge value={val.pnl_cny} suffix="" prefix="¥" className="text-xs w-20 text-right" />
+                </div>
               </div>
             ))}
           </div>
@@ -167,20 +215,52 @@ export default function PortfolioOverview({ data }: Props) {
 
         {/* 仓位类型分布 */}
         <div className="bg-card p-4">
-          <p className="text-sm text-gray-400 mb-3">仓位类型分布</p>
-          <ResponsiveContainer width="100%" height={180}>
-            <PieChart>
-              <Pie data={typePie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70}
-                label={({ name, pct }) => `${name} ${pct}%`}>
+          <p className="text-sm text-gray-400 mb-3">仓位类型分布（人民币）</p>
+          {typePie.length > 0 ? (
+            <>
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie
+                    data={typePie}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={70}
+                    label={({ name, pct }) => `${name} ${pct}%`}
+                    labelLine={false}
+                  >
+                    {typePie.map((entry) => (
+                      <Cell key={entry.key} fill={TYPE_COLORS[entry.key] || "#888"} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(v: number) => [fmtCny(v), "市值"]}
+                    contentStyle={{ background: "#1f2937", border: "none", borderRadius: 6 }}
+                    itemStyle={{ color: "#d1d5db" }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="space-y-1.5 mt-3">
                 {typePie.map((entry) => (
-                  <Cell key={entry.key} fill={TYPE_COLORS[entry.key] || "#888"} />
+                  <div key={entry.key} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className="inline-block w-2 h-2 rounded-full"
+                        style={{ background: TYPE_COLORS[entry.key] || "#888" }}
+                      />
+                      <span className="text-gray-300">{entry.name}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-gray-400 font-mono">{fmtCny(entry.value)}</span>
+                      <span className="text-gray-300 w-10 text-right font-semibold">{entry.pct}%</span>
+                    </div>
+                  </div>
                 ))}
-              </Pie>
-              <Tooltip formatter={(v: number) => fmtCny(v)} />
-            </PieChart>
-          </ResponsiveContainer>
-          {typePie.length === 0 && (
-            <p className="text-center text-gray-500 text-sm mt-4">尚未分类仓位，在持仓列表中可设置</p>
+              </div>
+            </>
+          ) : (
+            <p className="text-center text-gray-500 text-sm mt-16">尚未分类仓位，在持仓列表中可设置</p>
           )}
         </div>
       </div>
