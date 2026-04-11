@@ -34,11 +34,21 @@ class SyncService:
                 port=settings.futu_port,
                 trade_pwd=settings.futu_trade_pwd,
             )
+            loop = asyncio.get_event_loop()
             positions_data = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(None, broker.get_positions),
+                loop.run_in_executor(None, broker.get_positions),
                 timeout=30.0,
             )
             count = await self._upsert_positions(account_id, positions_data)
+
+            try:
+                cash_data = await asyncio.wait_for(
+                    loop.run_in_executor(None, broker.get_cash_balance),
+                    timeout=15.0,
+                )
+                await self._update_cash(account_id, cash_data)
+            except Exception as e:
+                logger.warning(f"富途现金同步失败（不影响持仓）: {e}")
 
             log.status = "success"
             log.positions_updated = count
@@ -68,11 +78,21 @@ class SyncService:
                 port=settings.ib_port,
                 client_id=settings.ib_client_id,
             )
+            loop = asyncio.get_event_loop()
             positions_data = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(None, broker.get_positions),
+                loop.run_in_executor(None, broker.get_positions),
                 timeout=30.0,
             )
             count = await self._upsert_positions(account_id, positions_data)
+
+            try:
+                cash_data = await asyncio.wait_for(
+                    loop.run_in_executor(None, broker.get_cash_balance),
+                    timeout=15.0,
+                )
+                await self._update_cash(account_id, cash_data)
+            except Exception as e:
+                logger.warning(f"IB 现金同步失败（不影响持仓）: {e}")
 
             log.status = "success"
             log.positions_updated = count
@@ -203,3 +223,13 @@ class SyncService:
 
         await self.db.commit()
         return count
+
+    async def _update_cash(self, account_id: int, cash_data: Dict[str, Any]):
+        """更新账户现金余额"""
+        result = await self.db.execute(select(Account).where(Account.id == account_id))
+        account = result.scalar_one_or_none()
+        if account:
+            account.cash_balance = cash_data.get("amount", 0)
+            account.cash_currency = cash_data.get("currency", "USD")
+            await self.db.commit()
+            logger.info(f"账户 {account_id} 现金更新: {account.cash_balance} {account.cash_currency}")

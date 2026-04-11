@@ -39,6 +39,8 @@ export interface Account {
   account_id?: string;
   currency: string;
   is_active: boolean;
+  cash_balance: number;
+  cash_currency: string;
   last_synced_at?: string;
   created_at: string;
 }
@@ -80,6 +82,10 @@ export interface AccountSummary {
   total_cost: number;
   total_pnl: number;
   total_pnl_pct: number;
+  cash_balance: number;
+  cash_currency: string;
+  total_assets: number;
+  equity_ratio: number;
 }
 
 export interface PortfolioSummary {
@@ -88,6 +94,9 @@ export interface PortfolioSummary {
   total_cost: number;
   total_pnl: number;
   total_pnl_pct: number;
+  total_cash: number;
+  total_assets: number;
+  equity_ratio: number;
   by_market: Record<string, { market_value: number; count: number; pnl: number; pct: number }>;
   by_position_type: Record<string, { market_value: number; count: number; pct: number }>;
 }

@@ -28,6 +28,8 @@ class Account(Base):
     market = Column(String(10), nullable=False)
     account_id = Column(String(100))
     currency = Column(String(10), default="USD")
+    cash_balance = Column(Float, default=0)       # 账户现金余额
+    cash_currency = Column(String(10), default="USD")  # 现金币种
     is_active = Column(Boolean, default=True)
     last_synced_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)

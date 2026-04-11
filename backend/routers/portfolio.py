@@ -35,6 +35,10 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         acc_cost = sum((p.cost_price or 0) * (p.quantity or 0) for p in positions)
         acc_pnl = sum(p.unrealized_pnl or 0 for p in positions)
         acc_pnl_pct = (acc_pnl / acc_cost * 100) if acc_cost > 0 else 0
+        acc_cash = account.cash_balance or 0
+        acc_cash_currency = account.cash_currency or "USD"
+        acc_total_assets = acc_market_value + acc_cash
+        acc_equity_ratio = round(acc_market_value / acc_total_assets * 100, 1) if acc_total_assets > 0 else 0
 
         account_summaries.append(AccountSummary(
             account=account,
@@ -43,6 +47,10 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
             total_cost=acc_cost,
             total_pnl=acc_pnl,
             total_pnl_pct=acc_pnl_pct,
+            cash_balance=acc_cash,
+            cash_currency=acc_cash_currency,
+            total_assets=acc_total_assets,
+            equity_ratio=acc_equity_ratio,
         ))
 
         total_market_value += acc_market_value
@@ -70,6 +78,9 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         data["pct"] = round(data["market_value"] / total_market_value * 100, 2) if total_market_value > 0 else 0
 
     total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+    total_cash = sum(a.cash_balance for a in account_summaries)
+    total_assets = total_market_value + total_cash
+    equity_ratio = round(total_market_value / total_assets * 100, 1) if total_assets > 0 else 0
 
     return PortfolioSummary(
         accounts=account_summaries,
@@ -77,6 +88,9 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         total_cost=total_cost,
         total_pnl=total_pnl,
         total_pnl_pct=total_pnl_pct,
+        total_cash=total_cash,
+        total_assets=total_assets,
+        equity_ratio=equity_ratio,
         by_market=by_market,
         by_position_type=by_position_type,
     )

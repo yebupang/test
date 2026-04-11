@@ -20,6 +20,8 @@ class AccountCreate(AccountBase):
 class AccountOut(AccountBase):
     id: int
     is_active: bool
+    cash_balance: float = 0
+    cash_currency: str = "USD"
     last_synced_at: Optional[datetime]
     created_at: datetime
 
@@ -79,6 +81,10 @@ class AccountSummary(BaseModel):
     total_cost: float
     total_pnl: float
     total_pnl_pct: float
+    cash_balance: float = 0
+    cash_currency: str = "USD"
+    total_assets: float = 0       # 股票市值 + 现金
+    equity_ratio: float = 0       # 仓位率（股票/总资产）
 
 
 class PortfolioSummary(BaseModel):
@@ -87,6 +93,9 @@ class PortfolioSummary(BaseModel):
     total_cost: float
     total_pnl: float
     total_pnl_pct: float
+    total_cash: float = 0         # 现金合计（近似，不做汇率换算）
+    total_assets: float = 0       # 总资产（股票 + 现金，近似）
+    equity_ratio: float = 0       # 综合仓位率
     by_market: dict
     by_position_type: dict
 

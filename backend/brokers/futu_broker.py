@@ -199,6 +199,44 @@ class FutuBroker:
             })
         return result
 
+    def get_cash_balance(self) -> Dict[str, Any]:
+        """获取账户现金余额"""
+        ft = self._import_futu()
+        for firm in self._all_security_firms(ft):
+            ctx = None
+            try:
+                ctx = self._create_ctx(ft, security_firm=firm)
+                ret, acc_list = ctx.get_acc_list()
+                if ret != ft.RET_OK or acc_list is None or acc_list.empty:
+                    continue
+                for i in range(len(acc_list)):
+                    row = acc_list.iloc[i]
+                    acc_id = self._safe_int(row.get("acc_id", 0))
+                    if acc_id == 0:
+                        continue
+                    if not self._is_real(row.get("trd_env")):
+                        continue
+                    if not self._is_active(row.get("acc_status")):
+                        continue
+                    ret2, acc_data = ctx.accinfo_query(trd_env=ft.TrdEnv.REAL, acc_id=acc_id)
+                    if ret2 != ft.RET_OK or acc_data is None or acc_data.empty:
+                        continue
+                    r = acc_data.iloc[0]
+                    cash = self._safe_float(r.get("cash", 0))
+                    currency_raw = r.get("currency", "")
+                    currency = self._format_enum(currency_raw) if currency_raw else "HKD"
+                    logger.info(f"Futu 现金余额 {cash} {currency}")
+                    return {"amount": cash, "currency": currency}
+            except Exception as e:
+                logger.debug(f"get_cash_balance firm={self._format_enum(firm)}: {e}")
+            finally:
+                if ctx:
+                    try:
+                        ctx.close()
+                    except Exception:
+                        pass
+        return {"amount": 0.0, "currency": "HKD"}
+
     def debug_raw(self) -> Dict[str, Any]:
         """返回原始 API 数据，用于排查问题"""
         ft = self._import_futu()

@@ -123,6 +123,23 @@ class IBBroker:
             return "A"
         return "US"  # 默认美股
 
+    def get_cash_balance(self) -> Dict[str, Any]:
+        """获取账户现金余额"""
+        self._connect()
+        try:
+            values = self._ib.accountValues()
+            # TotalCashValue 是各币种现金折算后的总现金（账户基础货币）
+            for v in values:
+                if v.tag == "TotalCashValue" and v.currency == "BASE":
+                    return {"amount": float(v.value or 0), "currency": "USD"}
+            # 如果没有 BASE，取第一个 TotalCashValue
+            for v in values:
+                if v.tag == "TotalCashValue":
+                    return {"amount": float(v.value or 0), "currency": v.currency or "USD"}
+            return {"amount": 0.0, "currency": "USD"}
+        finally:
+            self._disconnect()
+
     def get_account_summary(self) -> Dict[str, Any]:
         """获取账户资产汇总"""
         self._connect()
