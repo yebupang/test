@@ -168,27 +168,48 @@ class FutuBroker:
 
     # 货币基金名称关键词（中英文，不区分大小写）
     _MMF_NAME_KEYWORDS = (
-        "货币", "货基", "现金增利", "现金宝", "money market", "moneymarket",
+        # 最常见：几乎所有货基名称都含"货币"
+        "货币", "货基", "货币型",
+        # 常见简称/产品名：现金通、活期宝、活期+等
+        "现金", "活期",
+        # 特定货基产品名
+        "增利宝", "理财宝", "余额宝",
+        # 英文
+        "money market", "moneymarket",
         "cash fund", "liquid fund", "liquidity fund",
     )
+    # 股票/混合型基金特征词（用于排除 FUND 类型中的非货基）
+    _EQUITY_FUND_KEYWORDS = (
+        "股票", "混合", "增长", "成长", "价值",
+        "蓝筹", "科创", "创业", "量化", "对冲",
+    )
 
-    def _is_money_market_fund(self, sec_type: str, name: str) -> bool:
+    def _is_money_market_fund(self, stock_type: str, name: str) -> bool:
         """
         判断持仓是否为货币基金（应计入现金而非股票仓位）。
-        判断依据：
-        1. sec_type 为 FUND/MF，且名称含货基关键词；
-        2. 或 sec_type 为 ETF，且名称含货基关键词（部分货基以 ETF 形式上市）。
-        仅名称命中关键词也认定（兼容 sec_type 字段缺失的情况）。
+
+        路径1（名称命中）：名称含货币基金关键词，且 stock_type 不是明确的股票/衍生品类型。
+        路径2（类型推断）：Futu stock_type == FUND，且名称不含股票/混合型基金特征词，
+                          推定为货币基金或短债基金（保守处理，均视为现金等价物）。
         """
         name_lower = name.lower()
-        name_match = any(kw in name_lower for kw in self._MMF_NAME_KEYWORDS)
-        if not name_match:
-            return False
-        # 名称命中时，排除明显的非货基类型（如普通股票）
-        st = sec_type.upper()
-        if st in ("STK", "STOCK", "WARRANT", "BOND", "IDX", "INDEX", "FUTURES", "OPT"):
-            return False
-        return True
+        st = stock_type.upper()
+
+        # 路径1：名称关键词命中
+        if any(kw in name_lower for kw in self._MMF_NAME_KEYWORDS):
+            # 排除明确的非基金证券类型
+            if st in ("STK", "STOCK", "WARRANT", "BOND", "IDX",
+                      "INDEX", "FUTURES", "OPT", "PLATE", "PLATESET"):
+                return False
+            return True
+
+        # 路径2：stock_type == FUND，且名称不含股票/混合基金特征词
+        if st == "FUND":
+            if any(kw in name_lower for kw in self._EQUITY_FUND_KEYWORDS):
+                return False
+            return True
+
+        return False
 
     def _parse_positions(self, pos_data) -> List[Dict[str, Any]]:
         """解析持仓 DataFrame，使用官方推荐字段名"""
@@ -208,7 +229,8 @@ class FutuBroker:
             currency = currency_map.get(market, "")
 
             name = str(row.get("stock_name", ""))
-            sec_type = self._format_enum(row.get("sec_type", ""))
+            # 注意：Futu API 返回的字段名是 stock_type，不是 sec_type
+            stock_type = self._format_enum(row.get("stock_type", row.get("sec_type", "")))
 
             qty = self._safe_float(row.get("qty", 0))
             # 官方推荐 average_cost（均价），禁止用 cost_price（摊薄成本）
@@ -222,9 +244,9 @@ class FutuBroker:
             pnl = self._safe_float(row.get("unrealized_pl", 0))
             pnl_pct = self._safe_float(row.get("pl_ratio_avg_cost", 0))
 
-            is_cash_equiv = self._is_money_market_fund(sec_type, name)
+            is_cash_equiv = self._is_money_market_fund(stock_type, name)
             if is_cash_equiv:
-                logger.info(f"识别为货币基金（计入现金）: {symbol} {name} sec_type={sec_type}")
+                logger.info(f"识别为货币基金（计入现金）: {symbol} {name!r} stock_type={stock_type!r}")
 
             result.append({
                 "symbol": symbol,
@@ -286,8 +308,26 @@ class FutuBroker:
                             )
                             acc_entry["positions_ret"] = ret2
                             if ret2 == ft.RET_OK and pos_data is not None and not pos_data.empty:
+                                # 原始列名，用于确认 stock_type 字段是否存在
+                                acc_entry["raw_columns"] = list(pos_data.columns)
+                                # 每条持仓的关键原始字段（含 stock_type），辅助诊断货基识别
+                                acc_entry["raw_positions"] = [
+                                    {
+                                        "code": str(pos_data.iloc[j].get("code", "")),
+                                        "stock_name": str(pos_data.iloc[j].get("stock_name", "")),
+                                        "stock_type": self._format_enum(
+                                            pos_data.iloc[j].get("stock_type",
+                                            pos_data.iloc[j].get("sec_type", ""))
+                                        ),
+                                        "market_val": self._safe_float(pos_data.iloc[j].get("market_val", 0)),
+                                    }
+                                    for j in range(len(pos_data))
+                                ]
                                 acc_entry["positions"] = self._parse_positions(pos_data)
                                 acc_entry["positions_count"] = len(acc_entry["positions"])
+                                acc_entry["fund_positions"] = [
+                                    p for p in acc_entry["positions"] if p.get("is_cash_equivalent")
+                                ]
                             else:
                                 acc_entry["positions"] = []
                                 acc_entry["positions_count"] = 0
