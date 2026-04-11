@@ -40,21 +40,27 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         )
         positions = positions_result.scalars().all()
 
-        # 原币汇总
-        acc_market_value = sum(p.market_value or 0 for p in positions)
-        acc_cost = sum((p.cost_price or 0) * (p.quantity or 0) for p in positions)
-        acc_pnl = sum(p.unrealized_pnl or 0 for p in positions)
+        # 区分股票持仓与货币基金（货基计入现金，不计入仓位）
+        equity_positions = [p for p in positions if not p.is_cash_equivalent]
+        fund_positions   = [p for p in positions if p.is_cash_equivalent]
+
+        # 原币汇总（仅股票持仓）
+        acc_market_value = sum(p.market_value or 0 for p in equity_positions)
+        acc_cost = sum((p.cost_price or 0) * (p.quantity or 0) for p in equity_positions)
+        acc_pnl = sum(p.unrealized_pnl or 0 for p in equity_positions)
         acc_pnl_pct = (acc_pnl / acc_cost * 100) if acc_cost > 0 else 0
         acc_cash = account.cash_balance or 0
         acc_cash_currency = account.cash_currency or "USD"
         acc_total_assets = acc_market_value + acc_cash
         acc_equity_ratio = round(acc_market_value / acc_total_assets * 100, 1) if acc_total_assets > 0 else 0
 
-        # 各持仓折算人民币
-        acc_mv_cny = sum(mds.to_cny(p.market_value or 0, p.currency or "USD", fx) for p in positions)
-        acc_cost_cny = sum(mds.to_cny((p.cost_price or 0) * (p.quantity or 0), p.currency or "USD", fx) for p in positions)
-        acc_pnl_cny = sum(mds.to_cny(p.unrealized_pnl or 0, p.currency or "USD", fx) for p in positions)
-        acc_cash_cny = mds.to_cny(acc_cash, acc_cash_currency, fx)
+        # 各持仓折算人民币（股票）
+        acc_mv_cny = sum(mds.to_cny(p.market_value or 0, p.currency or "USD", fx) for p in equity_positions)
+        acc_cost_cny = sum(mds.to_cny((p.cost_price or 0) * (p.quantity or 0), p.currency or "USD", fx) for p in equity_positions)
+        acc_pnl_cny = sum(mds.to_cny(p.unrealized_pnl or 0, p.currency or "USD", fx) for p in equity_positions)
+        # 货币基金折算人民币（计入现金侧）
+        acc_fund_cash_cny = sum(mds.to_cny(p.market_value or 0, p.currency or "USD", fx) for p in fund_positions)
+        acc_cash_cny = mds.to_cny(acc_cash, acc_cash_currency, fx) + acc_fund_cash_cny
         acc_total_assets_cny = acc_mv_cny + acc_cash_cny
 
         account_summaries.append(AccountSummary(
@@ -70,6 +76,7 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
             equity_ratio=acc_equity_ratio,
             total_market_value_cny=round(acc_mv_cny, 2),
             total_assets_cny=round(acc_total_assets_cny, 2),
+            fund_cash_cny=round(acc_fund_cash_cny, 2),
         ))
 
         total_market_value += acc_market_value
@@ -80,8 +87,8 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         total_pnl_cny += acc_pnl_cny
         total_cash_cny += acc_cash_cny
 
-        # 按市场统计（折算人民币）
-        for p in positions:
+        # 按市场统计（折算人民币，仅股票持仓）
+        for p in equity_positions:
             market = p.market
             mv_cny = mds.to_cny(p.market_value or 0, p.currency or "USD", fx)
             pnl_cny = mds.to_cny(p.unrealized_pnl or 0, p.currency or "USD", fx)
@@ -136,8 +143,11 @@ async def list_positions(
     account_id: int | None = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """获取持仓列表，支持按市场/账户过滤"""
-    query = select(Position).where(Position.is_active == True)
+    """获取持仓列表，支持按市场/账户过滤（货币基金不在此列）"""
+    query = select(Position).where(
+        Position.is_active == True,
+        Position.is_cash_equivalent == False,
+    )
     if market:
         query = query.where(Position.market == market)
     if account_id:

@@ -89,7 +89,9 @@ export default function PortfolioOverview({ data }: Props) {
     }));
 
   const equityRatio = data.equity_ratio ?? 0;
-  const hasCash = data.total_cash_cny > 0;
+  // 任意账户有现金或货基，显示资产明细卡片
+  const hasCash = data.total_cash_cny > 0
+    || data.accounts.some((a) => (a.fund_cash_cny ?? 0) > 0);
 
   return (
     <div className="space-y-4">
@@ -176,7 +178,10 @@ export default function PortfolioOverview({ data }: Props) {
           <p className="text-sm text-gray-400 mb-3">各账户资产明细</p>
           <div className="space-y-2">
             {data.accounts.map((acc) => {
-              const cashCny = acc.total_assets_cny - acc.total_market_value_cny;
+              const fundCashCny = acc.fund_cash_cny ?? 0;
+              const rawCashCny = acc.total_assets_cny - acc.total_market_value_cny - fundCashCny;
+              const hasCashRow = rawCashCny > 0;
+              const hasFundRow = fundCashCny > 0;
               return (
                 <div key={acc.account.id} className="flex items-center justify-between text-sm">
                   <span className="text-gray-300">{acc.account.name}</span>
@@ -184,10 +189,15 @@ export default function PortfolioOverview({ data }: Props) {
                     <div className="text-right">
                       <div className="text-gray-300 font-mono text-xs">
                         股票 {fmtAmt(acc.total_market_value_cny)}
-                        {cashCny > 0 && (
+                        {hasCashRow && (
                           <span className="text-gray-500 ml-2">
                             现金 {fmtRaw(acc.cash_balance, acc.cash_currency)}
-                            <span className="text-gray-600 ml-1">≈{fmtAmt(cashCny)}</span>
+                            <span className="text-gray-600 ml-1">≈{fmtAmt(rawCashCny)}</span>
+                          </span>
+                        )}
+                        {hasFundRow && (
+                          <span className="text-emerald-600 ml-2">
+                            货基 {fmtAmt(fundCashCny)}
                           </span>
                         )}
                       </div>

@@ -78,6 +78,9 @@ class Position(Base):
     # 仓位分类（对应策略中的五种仓位）
     position_type = Column(String(20))  # bottom_fishing / defensive / allocation / volatile / speculative
 
+    # 资产类型标记：货币基金/现金类持仓不计入股票仓位
+    is_cash_equivalent = Column(Boolean, default=False)
+
     # 元数据
     is_active = Column(Boolean, default=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

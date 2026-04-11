@@ -87,6 +87,7 @@ class AccountSummary(BaseModel):
     equity_ratio: float = 0            # 仓位率（股票/总资产）
     total_market_value_cny: float = 0  # 股票市值折算人民币
     total_assets_cny: float = 0        # 总资产折算人民币
+    fund_cash_cny: float = 0           # 货币基金折算人民币（已含在 total_assets_cny 中）
 
 
 class PortfolioSummary(BaseModel):

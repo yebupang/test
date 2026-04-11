@@ -88,6 +88,7 @@ export interface AccountSummary {
   equity_ratio: number;
   total_market_value_cny: number;
   total_assets_cny: number;
+  fund_cash_cny: number;
 }
 
 export interface PortfolioSummary {

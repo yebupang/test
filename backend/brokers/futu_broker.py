@@ -166,6 +166,30 @@ class FutuBroker:
         logger.info(f"富途总持仓: {len(all_positions)} 条，现金: {cash_info}")
         return {"positions": all_positions, "cash": cash_info}
 
+    # 货币基金名称关键词（中英文，不区分大小写）
+    _MMF_NAME_KEYWORDS = (
+        "货币", "货基", "现金增利", "现金宝", "money market", "moneymarket",
+        "cash fund", "liquid fund", "liquidity fund",
+    )
+
+    def _is_money_market_fund(self, sec_type: str, name: str) -> bool:
+        """
+        判断持仓是否为货币基金（应计入现金而非股票仓位）。
+        判断依据：
+        1. sec_type 为 FUND/MF，且名称含货基关键词；
+        2. 或 sec_type 为 ETF，且名称含货基关键词（部分货基以 ETF 形式上市）。
+        仅名称命中关键词也认定（兼容 sec_type 字段缺失的情况）。
+        """
+        name_lower = name.lower()
+        name_match = any(kw in name_lower for kw in self._MMF_NAME_KEYWORDS)
+        if not name_match:
+            return False
+        # 名称命中时，排除明显的非货基类型（如普通股票）
+        st = sec_type.upper()
+        if st in ("STK", "STOCK", "WARRANT", "BOND", "IDX", "INDEX", "FUTURES", "OPT"):
+            return False
+        return True
+
     def _parse_positions(self, pos_data) -> List[Dict[str, Any]]:
         """解析持仓 DataFrame，使用官方推荐字段名"""
         result = []
@@ -183,6 +207,9 @@ class FutuBroker:
             currency_map = {"HK": "HKD", "US": "USD", "CN": "CNY", "SG": "SGD"}
             currency = currency_map.get(market, "")
 
+            name = str(row.get("stock_name", ""))
+            sec_type = self._format_enum(row.get("sec_type", ""))
+
             qty = self._safe_float(row.get("qty", 0))
             # 官方推荐 average_cost（均价），禁止用 cost_price（摊薄成本）
             cost = self._safe_float(row.get("average_cost", 0))
@@ -195,9 +222,13 @@ class FutuBroker:
             pnl = self._safe_float(row.get("unrealized_pl", 0))
             pnl_pct = self._safe_float(row.get("pl_ratio_avg_cost", 0))
 
+            is_cash_equiv = self._is_money_market_fund(sec_type, name)
+            if is_cash_equiv:
+                logger.info(f"识别为货币基金（计入现金）: {symbol} {name} sec_type={sec_type}")
+
             result.append({
                 "symbol": symbol,
-                "name": str(row.get("stock_name", "")),
+                "name": name,
                 "market": market,
                 "currency": currency,
                 "quantity": qty,
@@ -207,6 +238,7 @@ class FutuBroker:
                 "unrealized_pnl": pnl,
                 "unrealized_pnl_pct": pnl_pct,
                 "broker": "futu",
+                "is_cash_equivalent": is_cash_equiv,
             })
         return result
 

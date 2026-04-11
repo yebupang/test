@@ -121,6 +121,8 @@ class SyncService:
         if not positions:
             return 0
 
+        # 货币基金不走行情刷新（价格几乎恒为 1，净值由基金公司更新）
+        positions = [p for p in positions if not p.is_cash_equivalent]
         symbols_with_market = [(p.symbol, p.market) for p in positions]
         quotes = await self.market_data.get_realtime_quotes(symbols_with_market)
 
@@ -175,7 +177,8 @@ class SyncService:
             for field in ("name", "currency", "quantity", "cost_price", "current_price",
                           "market_value", "unrealized_pnl", "unrealized_pnl_pct",
                           "pe_ratio", "pb_ratio", "dividend_yield", "market_cap",
-                          "week_52_high", "week_52_low", "beta", "change_pct"):
+                          "week_52_high", "week_52_low", "beta", "change_pct",
+                          "is_cash_equivalent"):
                 if field in data and data[field] is not None:
                     setattr(pos, field, data[field])
 
