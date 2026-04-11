@@ -228,32 +228,114 @@ class MarketDataService:
 
     async def get_exchange_rates(self) -> Dict[str, float]:
         """
-        获取对人民币汇率：{"USD": 7.24, "HKD": 0.93, "CNY": 1.0}
-        优先从富途 OpenD 获取实时报价，失败则降级到 AKShare，再失败用近似值。
+        获取对人民币汇率：{"USD": 6.83, "HKD": 0.88, "CNY": 1.0}
+        优先从 open.er-api.com 获取实时汇率（免费、无需 key），
+        失败则降级到 AKShare 中行中间价（currency_boc_safe），
+        再失败尝试富途 OpenD 行情，最后使用近似值。
         结果缓存 5 分钟，避免频繁请求。
         """
         global _FX_CACHE, _FX_CACHE_TS
         if _FX_CACHE and time.time() - _FX_CACHE_TS < _FX_CACHE_TTL:
             return _FX_CACHE
 
-        rates = await self._fetch_fx_futu()
-        if not rates:
-            rates = await self._fetch_fx_akshare()
-        if not rates:
-            rates = {}
+        rates: Dict[str, float] = {}
+        for fetcher in (self._fetch_fx_httpx, self._fetch_fx_akshare, self._fetch_fx_futu):
+            try:
+                rates = await fetcher()
+            except Exception as e:
+                logger.warning(f"{fetcher.__name__} 抛出异常: {e}")
+                rates = {}
+            if rates.get("USD") and rates.get("HKD"):
+                break
 
-        result = {
-            "CNY": 1.0,
-            "USD": rates.get("USD", 7.24),
-            "HKD": rates.get("HKD", 0.93),
-        }
+        # 合理性校验：USD/CNY 正常范围 5.5 ~ 8.5，HKD/CNY 正常 0.7 ~ 1.1
+        usd = rates.get("USD")
+        hkd = rates.get("HKD")
+        if not (usd and 5.5 <= usd <= 8.5):
+            logger.warning(f"USD/CNY 汇率异常或缺失 ({usd})，使用近似值 6.83")
+            usd = 6.83
+        if not (hkd and 0.7 <= hkd <= 1.1):
+            logger.warning(f"HKD/CNY 汇率异常或缺失 ({hkd})，使用近似值 0.88")
+            hkd = 0.88
+
+        result = {"CNY": 1.0, "USD": round(usd, 4), "HKD": round(hkd, 4)}
         _FX_CACHE = result
         _FX_CACHE_TS = time.time()
         logger.info(f"汇率更新: {result}")
         return result
 
+    async def _fetch_fx_httpx(self) -> Dict[str, float]:
+        """
+        通过免费公共 API 获取实时汇率：
+        https://open.er-api.com/v6/latest/USD
+        返回 {"rates": {"CNY": 6.8278, "HKD": 7.78, ...}}
+        """
+        try:
+            import httpx
+            url = "https://open.er-api.com/v6/latest/USD"
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                data = r.json()
+            if data.get("result") != "success":
+                logger.warning(f"open.er-api 返回 result != success: {data.get('result')}")
+                return {}
+            r_map = data.get("rates") or {}
+            cny = float(r_map.get("CNY") or 0)
+            hkd_usd = float(r_map.get("HKD") or 0)  # 1 USD = X HKD
+            if cny <= 0 or hkd_usd <= 0:
+                logger.warning(f"open.er-api 返回缺少 CNY/HKD: {r_map}")
+                return {}
+            result = {
+                "USD": cny,              # 1 USD = cny CNY
+                "HKD": cny / hkd_usd,    # 1 HKD = (cny / hkd_usd) CNY
+            }
+            logger.info(f"open.er-api 汇率: {result}")
+            return result
+        except Exception as e:
+            logger.warning(f"open.er-api 汇率获取失败: {e}")
+            return {}
+
+    async def _fetch_fx_akshare(self) -> Dict[str, float]:
+        """
+        通过 AKShare 获取国家外汇管理局（SAFE）人民币中间价。
+        函数：ak.currency_boc_safe()
+        返回列包含 '日期', '美元', '港元' 等；SAFE 中间价是"每 100 外币单位对应人民币"，
+        因此需要除以 100 换算为单位汇率。
+        """
+        try:
+            import akshare as ak
+        except ImportError:
+            logger.warning("akshare 未安装，无法获取 SAFE 汇率")
+            return {}
+        try:
+            df = await asyncio.wait_for(
+                asyncio.to_thread(ak.currency_boc_safe),
+                timeout=15.0,
+            )
+            if df is None or df.empty:
+                logger.warning("currency_boc_safe 返回空")
+                return {}
+            # 取最新一行（按日期排序后的最后一行）
+            df = df.sort_values(by="日期")
+            row = df.iloc[-1]
+            usd_100 = float(row.get("美元") or 0)
+            hkd_100 = float(row.get("港元") or 0)
+            if usd_100 <= 0 or hkd_100 <= 0:
+                logger.warning(f"SAFE 汇率缺失: 美元={usd_100}, 港元={hkd_100}")
+                return {}
+            result = {
+                "USD": usd_100 / 100.0,
+                "HKD": hkd_100 / 100.0,
+            }
+            logger.info(f"SAFE 汇率({row.get('日期')}): {result}")
+            return result
+        except Exception as e:
+            logger.warning(f"AKShare SAFE 汇率获取失败: {e}")
+            return {}
+
     async def _fetch_fx_futu(self) -> Dict[str, float]:
-        """通过富途 OpenD 行情接口获取实时汇率"""
+        """通过富途 OpenD 行情接口获取实时汇率（最终兜底）"""
         try:
             from config import get_settings
             settings = get_settings()
@@ -287,28 +369,7 @@ class MarketDataService:
                 logger.info(f"富途汇率: {rates}")
             return rates
         except Exception as e:
-            logger.debug(f"富途汇率获取失败: {e}")
-            return {}
-
-    async def _fetch_fx_akshare(self) -> Dict[str, float]:
-        """通过 AKShare 获取汇率（备用）"""
-        try:
-            import akshare as ak
-            result = {}
-            for pair, key in [("USDCNY", "USD"), ("HKDCNY", "HKD")]:
-                try:
-                    df = await asyncio.to_thread(
-                        ak.currency_pair_realtime, symbol=pair
-                    )
-                    if df is not None and not df.empty:
-                        price = float(df.iloc[-1].get("买入价", 0) or df.iloc[-1].iloc[-1] or 0)
-                        if price > 0:
-                            result[key] = price
-                except Exception as e:
-                    logger.debug(f"AKShare {pair} 失败: {e}")
-            return result
-        except Exception as e:
-            logger.debug(f"AKShare 汇率获取失败: {e}")
+            logger.warning(f"富途汇率获取失败: {e}")
             return {}
 
     def to_cny(self, amount: float, currency: str, rates: Dict[str, float]) -> float:
