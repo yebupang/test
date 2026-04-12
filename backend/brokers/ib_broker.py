@@ -80,51 +80,81 @@ class IBBroker:
             positions = self._ib.positions()
             account_values = self._ib.accountValues()
 
-            # 获取当前市价
+            # 获取当前市价 — 期权用 localSymbol 作为 key，避免同标的多张期权冲突
             contracts = [p.contract for p in positions]
             if contracts:
                 tickers = self._ib.reqTickers(*contracts)
-                # marketPrice() 在休市时返回 NaN，过滤掉无效值
-                price_map = {
-                    t.contract.symbol: t.marketPrice()
-                    for t in tickers
-                    if t.marketPrice() is not None and not math.isnan(t.marketPrice())
-                }
+                price_map = {}
+                for t in tickers:
+                    price = t.marketPrice()
+                    if price is not None and not math.isnan(price):
+                        key = t.contract.localSymbol or t.contract.symbol
+                        price_map[key] = price
             else:
                 price_map = {}
 
             result = []
             for pos in positions:
                 contract = pos.contract
-                symbol = contract.symbol
-                if contract.secType not in ("STK", "FUND"):
+                if contract.secType not in ("STK", "FUND", "OPT"):
                     continue
 
                 market = self._detect_market(contract)
                 currency = contract.currency or "USD"
                 avg_cost = float(pos.avgCost or 0)
                 qty = float(pos.position or 0)
-                # 休市时 price_map 中无该 symbol，回退到均价作为当前价
-                cur_price = price_map.get(symbol) or avg_cost
-                market_val = cur_price * qty
-                pnl = (cur_price - avg_cost) * qty
-                pnl_pct = ((cur_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0
 
-                name = contract.localSymbol or symbol
-                result.append({
-                    "symbol": symbol,
-                    "name": name,
-                    "market": market,
-                    "currency": currency,
-                    "quantity": qty,
-                    "cost_price": avg_cost,
-                    "current_price": cur_price,
-                    "market_value": market_val,
-                    "unrealized_pnl": pnl,
-                    "unrealized_pnl_pct": pnl_pct,
-                    "broker": "ib",
-                    "is_cash_equivalent": is_cash_equivalent(symbol, name),
-                })
+                if contract.secType == "OPT":
+                    # 期权处理：symbol 使用 localSymbol 确保唯一性
+                    symbol = contract.localSymbol or contract.symbol
+                    multiplier = float(getattr(contract, "multiplier", None) or 100)
+                    # 从 price_map 取权利金；休市时回退到成本权利金（avg_cost / multiplier）
+                    price_key = contract.localSymbol or contract.symbol
+                    cost_premium = (avg_cost / multiplier) if multiplier > 0 else avg_cost
+                    option_premium = price_map.get(price_key) or cost_premium
+                    # IB 的 avgCost 已含乘数（每张合约成本 = 权利金 × 乘数）
+                    market_val = option_premium * multiplier * qty
+                    pnl = market_val - avg_cost * qty
+                    pnl_pct = (pnl / (avg_cost * qty) * 100) if avg_cost * qty != 0 else 0
+                    name = self._format_option_name(contract)
+                    result.append({
+                        "symbol": symbol,
+                        "name": name,
+                        "market": market,
+                        "currency": currency,
+                        "quantity": qty,
+                        "cost_price": avg_cost,         # 每张合约成本（含乘数）
+                        "current_price": option_premium, # 权利金单价
+                        "market_value": market_val,
+                        "unrealized_pnl": pnl,
+                        "unrealized_pnl_pct": pnl_pct,
+                        "broker": "ib",
+                        "is_cash_equivalent": False,
+                    })
+                else:
+                    # 股票 / 基金
+                    symbol = contract.symbol
+                    price_key = contract.localSymbol or symbol
+                    # 休市时 price_map 中无该 symbol，回退到均价作为当前价
+                    cur_price = price_map.get(price_key) or price_map.get(symbol) or avg_cost
+                    market_val = cur_price * qty
+                    pnl = (cur_price - avg_cost) * qty
+                    pnl_pct = ((cur_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0
+                    name = contract.localSymbol or symbol
+                    result.append({
+                        "symbol": symbol,
+                        "name": name,
+                        "market": market,
+                        "currency": currency,
+                        "quantity": qty,
+                        "cost_price": avg_cost,
+                        "current_price": cur_price,
+                        "market_value": market_val,
+                        "unrealized_pnl": pnl,
+                        "unrealized_pnl_pct": pnl_pct,
+                        "broker": "ib",
+                        "is_cash_equivalent": is_cash_equivalent(symbol, name),
+                    })
 
             # 同一连接里取现金（BASE 是折算后的账户基础货币）
             cash_amount = 0.0
@@ -144,6 +174,25 @@ class IBBroker:
             return {"positions": result, "cash": {"amount": cash_amount, "currency": cash_currency}}
         finally:
             self._disconnect()
+
+    def _format_option_name(self, contract) -> str:
+        """将 IB 期权合约格式化为可读名称，如 'AAPL C170 2024-01-19'"""
+        try:
+            underlying = contract.symbol or ""
+            right = getattr(contract, "right", "") or ""
+            strike = getattr(contract, "strike", 0) or 0
+            expiry_raw = getattr(contract, "lastTradeDateOrContractMonth", "") or ""
+            if len(expiry_raw) >= 8:
+                expiry = f"{expiry_raw[:4]}-{expiry_raw[4:6]}-{expiry_raw[6:8]}"
+            elif len(expiry_raw) >= 6:
+                expiry = f"{expiry_raw[:4]}-{expiry_raw[4:6]}"
+            else:
+                expiry = expiry_raw
+            right_str = "C" if right.upper() == "C" else "P"
+            strike_str = f"{int(strike)}" if strike == int(strike) else f"{strike:.2f}"
+            return f"{underlying} {right_str}{strike_str} {expiry}"
+        except Exception:
+            return contract.localSymbol or contract.symbol or "OPT"
 
     def _detect_market(self, contract) -> str:
         exchange = getattr(contract, "exchange", "") or ""
