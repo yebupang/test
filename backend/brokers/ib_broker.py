@@ -135,9 +135,14 @@ class IBBroker:
             self._disconnect()
 
     def _detect_market(self, contract) -> str:
-        exchange = contract.exchange or ""
-        currency = contract.currency or ""
-        primary_exchange = contract.primaryExch or ""
+        exchange = getattr(contract, "exchange", "") or ""
+        currency = getattr(contract, "currency", "") or ""
+        # ib_insync 0.9.x 使用 primaryExchange（旧版为 primaryExch）
+        primary_exchange = (
+            getattr(contract, "primaryExchange", "")
+            or getattr(contract, "primaryExch", "")
+            or ""
+        )
 
         if currency == "HKD" or "HKEX" in exchange or "SEHK" in primary_exchange:
             return "HK"
