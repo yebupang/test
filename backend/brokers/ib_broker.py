@@ -24,24 +24,29 @@ class IBBroker:
         self._ib = None
         self._loop = None
 
-    def _ensure_event_loop(self):
-        """ib_insync 依赖 asyncio，在线程池里运行时需要手动创建事件循环"""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                raise RuntimeError("loop closed")
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+    def _connect(self):
+        """
+        创建标准 asyncio 事件循环并连接 IB TWS。
+
+        uvicorn 以 uvloop 作为主线程事件循环，而 ib_insync 的 util.startLoop()
+        内部调用 nest_asyncio.apply()，该库不支持 uvloop，会抛出
+        "Can't patch loop of type <class 'uvloop.Loop'>" 错误。
+
+        解决方案：在当前工作线程（executor）里显式创建标准 asyncio 事件循环，
+        然后直接使用 ib_insync 的同步 API（不调用 util.startLoop()）。
+        线程中新建的标准循环处于非运行状态，ib_insync 的同步包装器会通过
+        loop.run_until_complete() 执行异步操作，无需 nest_asyncio。
+        """
+        # 显式使用标准 asyncio 策略创建事件循环，避免继承 uvloop 策略
+        loop = asyncio.DefaultEventLoopPolicy().new_event_loop()
+        asyncio.set_event_loop(loop)
         self._loop = loop
 
-    def _connect(self):
-        self._ensure_event_loop()
         try:
-            from ib_insync import IB, util
-            util.startLoop()  # 兼容 Jupyter/线程环境
+            from ib_insync import IB
         except ImportError:
             raise RuntimeError("ib_insync 未安装，请运行: pip install ib_insync")
+
         try:
             self._ib = IB()
             self._ib.connect(self.host, self.port, clientId=self.client_id, timeout=15)
@@ -58,6 +63,12 @@ class IBBroker:
                 self._ib.disconnect()
         except Exception:
             pass
+        finally:
+            try:
+                if self._loop and not self._loop.is_closed():
+                    self._loop.close()
+            except Exception:
+                pass
 
     def get_positions(self) -> Dict[str, Any]:
         """获取盈透所有持仓和现金，在同一次连接里完成"""
