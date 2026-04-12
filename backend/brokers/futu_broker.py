@@ -13,6 +13,8 @@
 import logging
 from typing import List, Dict, Any, Optional
 
+from brokers.cash_equivalents import is_ultra_short_treasury
+
 logger = logging.getLogger(__name__)
 
 
@@ -259,11 +261,15 @@ class FutuBroker:
             code = f"{p.get('market', '')}.{symbol}"
             stock_type = stock_type_map.get(code, p.get("stock_type", ""))
             p["stock_type"] = stock_type
-            p["is_cash_equivalent"] = self._is_money_market_fund(stock_type, p.get("name", ""))
+            name = p.get("name", "")
+            is_mmf = self._is_money_market_fund(stock_type, name)
+            is_treasury = is_ultra_short_treasury(symbol, name)
+            p["is_cash_equivalent"] = is_mmf or is_treasury
             if p["is_cash_equivalent"]:
                 fund_count += 1
+                reason = "超短期国债ETF" if is_treasury else "货币基金"
                 logger.info(
-                    f"识别为货币基金: {code} {p.get('name')!r} "
+                    f"识别为{reason}: {code} {name!r} "
                     f"stock_type={stock_type!r} market_val={p.get('market_value')}"
                 )
 
@@ -358,8 +364,8 @@ class FutuBroker:
             pnl = self._safe_float(row.get("unrealized_pl", 0))
             pnl_pct = self._safe_float(row.get("pl_ratio_avg_cost", 0))
 
-            # 名称初步判断（stock_type 为空，仅靠名称关键词做第一次猜测）
-            is_cash_equiv = self._is_money_market_fund("", name)
+            # 名称/代码初步判断（stock_type 为空，_enrich_with_stock_type 会再覆盖）
+            is_cash_equiv = self._is_money_market_fund("", name) or is_ultra_short_treasury(symbol, name)
 
             result.append({
                 "symbol": symbol,

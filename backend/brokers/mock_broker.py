@@ -57,6 +57,12 @@ MOCK_POSITIONS = [
      "quantity": 1, "cost_price": 50000.0, "current_price": 50000.0,
      "market_value": 50000.0, "unrealized_pnl": 0.0, "unrealized_pnl_pct": 0.0,
      "broker": "mock", "is_cash_equivalent": True, "stock_type": "FUND_CASH"},
+
+    # 模拟超短期美国国债 ETF（SGOV，等价现金）
+    {"symbol": "SGOV", "name": "iShares 0-3 Month Treasury Bond ETF", "market": "US", "currency": "USD",
+     "quantity": 500, "cost_price": 100.35, "current_price": 100.36,
+     "market_value": 50180.0, "unrealized_pnl": 5.0, "unrealized_pnl_pct": 0.01,
+     "broker": "mock", "is_cash_equivalent": True},
 ]
 
 MOCK_WATCHLIST = [

@@ -12,6 +12,8 @@ import logging
 import math
 from typing import List, Dict, Any
 
+from brokers.cash_equivalents import is_cash_equivalent
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,9 +110,10 @@ class IBBroker:
                 pnl = (cur_price - avg_cost) * qty
                 pnl_pct = ((cur_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0
 
+                name = contract.localSymbol or symbol
                 result.append({
                     "symbol": symbol,
-                    "name": contract.localSymbol or symbol,
+                    "name": name,
                     "market": market,
                     "currency": currency,
                     "quantity": qty,
@@ -120,6 +123,7 @@ class IBBroker:
                     "unrealized_pnl": pnl,
                     "unrealized_pnl_pct": pnl_pct,
                     "broker": "ib",
+                    "is_cash_equivalent": is_cash_equivalent(symbol, name),
                 })
 
             # 同一连接里取现金（BASE 是折算后的账户基础货币）
