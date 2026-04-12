@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     ib_port: int = 7497
     ib_client_id: int = 1
 
+    # 同花顺客户端路径（Windows，easytrader 使用）
+    ths_client_path: str = r"C:\同花顺软件\同花顺\xiadan.exe"
+
     anthropic_api_key: str = ""
     sync_interval: int = 300
     use_mock_data: bool = False
