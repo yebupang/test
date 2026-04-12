@@ -51,6 +51,12 @@ MOCK_POSITIONS = [
      "market_value": 17250.0, "unrealized_pnl": -1250.0, "unrealized_pnl_pct": -6.76,
      "broker": "mock", "pe_ratio": 18.5, "pb_ratio": 4.2, "change_pct": -0.8,
      "week_52_high": 235.0, "week_52_low": 130.0, "beta": 1.15},
+
+    # 模拟货币基金（利息宝/基金余额）
+    {"symbol": "_FUND", "name": "基金余额", "market": "HK", "currency": "HKD",
+     "quantity": 1, "cost_price": 50000.0, "current_price": 50000.0,
+     "market_value": 50000.0, "unrealized_pnl": 0.0, "unrealized_pnl_pct": 0.0,
+     "broker": "mock", "is_cash_equivalent": True, "stock_type": "FUND_CASH"},
 ]
 
 MOCK_WATCHLIST = [

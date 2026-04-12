@@ -141,18 +141,40 @@ class FutuBroker:
                         logger.info(f"账户 {acc_id} 持仓 {len(positions)} 条")
                         all_positions.extend(positions)
 
-                    # 同一连接里查现金
+                    # 同一连接里查现金和基金资产
                     ret3, acc_data = ctx.accinfo_query(trd_env=ft.TrdEnv.REAL, acc_id=acc_id)
                     if ret3 == ft.RET_OK and acc_data is not None and not acc_data.empty:
                         r = acc_data.iloc[0]
                         cash = self._safe_float(r.get("cash", 0))
+                        # fund_assets = 基金资产净值（利息宝等非上市基金产品，不在 position_list_query 中）
+                        fund_assets = self._safe_float(r.get("fund_assets", 0))
                         currency_raw = r.get("currency", "HKD")
                         currency = self._format_enum(currency_raw) if currency_raw else "HKD"
                         # currency 可能是 "Currency.HKD" 格式，取最后一段
                         if "." in str(currency):
                             currency = str(currency).split(".")[-1]
                         cash_info = {"amount": cash, "currency": currency}
-                        logger.info(f"账户 {acc_id} 现金 {cash} {currency}")
+                        logger.info(f"账户 {acc_id} 现金 {cash} {currency}，基金资产 {fund_assets} {currency}")
+
+                        # 若有基金资产（如利息宝），生成合成持仓以便纳入现金计算
+                        if fund_assets > 0:
+                            market = "HK" if currency == "HKD" else "US"
+                            all_positions.append({
+                                "symbol": "_FUND",
+                                "name": "基金余额",
+                                "market": market,
+                                "currency": currency,
+                                "quantity": 1,
+                                "cost_price": fund_assets,
+                                "current_price": fund_assets,
+                                "market_value": fund_assets,
+                                "unrealized_pnl": 0,
+                                "unrealized_pnl_pct": 0,
+                                "broker": "futu",
+                                "is_cash_equivalent": True,
+                                "stock_type": "FUND_CASH",
+                            })
+                            logger.info(f"账户 {acc_id} 生成基金余额合成持仓: {fund_assets} {currency}")
 
             except Exception as e:
                 logger.debug(f"SecurityFirm={self._format_enum(firm)} 查询跳过: {e}")
@@ -178,12 +200,15 @@ class FutuBroker:
         position_list_query 不包含 stock_type，必须通过行情快照接口补充。
         参考：opend-skills/skills/futuapi/scripts/quote/get_stock_info.py
         """
-        # 提取所有有效 code（格式：MARKET.SYMBOL）
+        # 提取所有有效 code（格式：MARKET.SYMBOL），跳过合成持仓（symbol 以 _ 开头）
         codes: List[str] = []
         seen_codes: set = set()
         for p in positions:
             market = p.get("market", "")
             symbol = p.get("symbol", "")
+            # 合成持仓（如 _FUND）不走行情快照，stock_type 已在创建时设置
+            if symbol.startswith("_"):
+                continue
             if market and symbol:
                 code = f"{market}.{symbol}"
                 if code not in seen_codes:
@@ -222,10 +247,17 @@ class FutuBroker:
                     pass
 
         # 用准确的 stock_type 更新每个持仓的 is_cash_equivalent
+        # 合成持仓（_FUND 等）已有正确的 stock_type 和 is_cash_equivalent，跳过
         fund_count = 0
         for p in positions:
-            code = f"{p.get('market', '')}.{p.get('symbol', '')}"
-            stock_type = stock_type_map.get(code, "")
+            symbol = p.get("symbol", "")
+            if symbol.startswith("_"):
+                # 合成持仓直接保留已有标记
+                if p.get("is_cash_equivalent"):
+                    fund_count += 1
+                continue
+            code = f"{p.get('market', '')}.{symbol}"
+            stock_type = stock_type_map.get(code, p.get("stock_type", ""))
             p["stock_type"] = stock_type
             p["is_cash_equivalent"] = self._is_money_market_fund(stock_type, p.get("name", ""))
             if p["is_cash_equivalent"]:
@@ -260,26 +292,37 @@ class FutuBroker:
         """
         判断持仓是否为货币基金（应计入现金而非股票仓位）。
 
+        注意：富途 SecurityType 枚举无 FUND 类型；
+        上市货币基金 ETF（如 CSOP港元货市ETF）的 stock_type == "ETF"；
+        非上市基金产品（利息宝等）通过 fund_assets 字段获取，stock_type == "FUND_CASH"。
+
         路径1（名称命中）：名称含货币基金关键词，且 stock_type 不是明确的股票/衍生品类型。
-        路径2（类型推断）：Futu stock_type == FUND，且名称不含股票/混合型基金特征词，
-                          推定为货币基金或短债基金（保守处理，均视为现金等价物）。
+        路径2（ETF 类型 + 名称过滤）：stock_type == ETF，名称含基金类关键词且不含股票/混合基金特征词。
+        路径3（合成基金持仓）：stock_type == "FUND_CASH"，直接标记为现金等价物。
         """
         name_lower = name.lower()
         st = stock_type.upper()
 
-        # 路径1：名称关键词命中
+        # 路径3：合成基金余额持仓（由 fund_assets 字段生成）
+        if st == "FUND_CASH":
+            return True
+
+        # 路径1：名称关键词命中（最可靠的方法）
         if any(kw in name_lower for kw in self._MMF_NAME_KEYWORDS):
-            # 排除明确的非基金证券类型
-            if st in ("STK", "STOCK", "WARRANT", "BOND", "IDX",
-                      "INDEX", "FUTURES", "OPT", "PLATE", "PLATESET"):
+            # 排除明确的非基金证券类型（STOCK=普通股票，WARRANT=权证等）
+            if st in ("STOCK", "WARRANT", "BWRT", "DRVT", "FUTURE", "IDX", "PLATE", "PLATESET"):
                 return False
             return True
 
-        # 路径2：stock_type == FUND，且名称不含股票/混合基金特征词
-        if st == "FUND":
-            if any(kw in name_lower for kw in self._EQUITY_FUND_KEYWORDS):
-                return False
-            return True
+        # 路径2：ETF 类型 + 名称含基金关键词且不含股票/混合基金特征词
+        # 富途上市货币基金 ETF 的 stock_type = "ETF"
+        if st == "ETF":
+            fund_name_keywords = ("货币", "货基", "现金", "活期", "理财", "增利",
+                                  "money market", "cash fund", "liquidity")
+            if any(kw in name_lower for kw in fund_name_keywords):
+                if any(kw in name_lower for kw in self._EQUITY_FUND_KEYWORDS):
+                    return False
+                return True
 
         return False
 
