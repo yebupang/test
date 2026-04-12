@@ -40,17 +40,6 @@ async def sync_ib(account_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(503, f"IB 同步失败: {e}")
 
 
-@router.post("/ths/{account_id}", response_model=SyncResult)
-async def sync_ths(account_id: int, db: AsyncSession = Depends(get_db)):
-    """同步同花顺客户端持仓（需要 Windows + 同花顺已启动登录）"""
-    svc = SyncService(db)
-    try:
-        result = await svc.sync_ths(account_id)
-        return SyncResult(broker="ths", **result, message=result.get("message", "同步完成"))
-    except Exception as e:
-        raise HTTPException(503, f"同花顺同步失败: {e}")
-
-
 @router.post("/mock/{account_id}", response_model=SyncResult)
 async def sync_mock(account_id: int, db: AsyncSession = Depends(get_db)):
     """加载模拟数据（开发调试用）"""

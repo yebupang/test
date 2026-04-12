@@ -73,12 +73,6 @@ class SyncService:
         )
         return await self._sync_broker("ib", account_id, broker.get_positions)
 
-    async def sync_ths(self, account_id: int) -> Dict[str, Any]:
-        """同步同花顺客户端持仓（需要 Windows + 同花顺已启动）"""
-        from brokers.ths_broker import THSBroker
-        broker = THSBroker(client_path=settings.ths_client_path)
-        return await self._sync_broker("ths", account_id, broker.get_positions)
-
     async def sync_mock(self, account_id: int) -> Dict[str, Any]:
         """加载模拟数据（开发测试用）"""
         from brokers.mock_broker import get_mock_positions
