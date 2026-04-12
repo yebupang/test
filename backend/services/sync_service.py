@@ -178,7 +178,8 @@ class SyncService:
                           "market_value", "unrealized_pnl", "unrealized_pnl_pct",
                           "pe_ratio", "pb_ratio", "dividend_yield", "market_cap",
                           "week_52_high", "week_52_low", "beta", "change_pct",
-                          "is_cash_equivalent"):
+                          "is_cash_equivalent",
+                          "option_right", "option_strike", "option_multiplier"):
                 if field in data and data[field] is not None:
                     setattr(pos, field, data[field])
 

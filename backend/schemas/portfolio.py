@@ -61,6 +61,10 @@ class PositionOut(PositionBase):
     week_52_low: Optional[float] = None
     beta: Optional[float] = None
     position_type: Optional[str] = None
+    is_cash_equivalent: bool = False
+    option_right: Optional[str] = None
+    option_strike: Optional[float] = None
+    option_multiplier: Optional[float] = None
     updated_at: Optional[datetime] = None
 
     class Config:

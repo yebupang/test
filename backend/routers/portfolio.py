@@ -28,6 +28,8 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
     total_cost_cny = 0.0
     total_pnl_cny = 0.0
     total_cash_cny = 0.0
+    total_short_put_exercise_cny = 0.0   # 全局 sell put 行权替换量
+    total_short_put_mv_cny = 0.0         # 全局 sell put 负市值
     by_market: dict = {}
     by_position_type: dict = {}
 
@@ -52,7 +54,6 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         acc_cash = account.cash_balance or 0
         acc_cash_currency = account.cash_currency or "USD"
         acc_total_assets = acc_market_value + acc_cash
-        acc_equity_ratio = round(acc_market_value / acc_total_assets * 100, 1) if acc_total_assets > 0 else 0
 
         # 各持仓折算人民币（股票）
         acc_mv_cny = sum(mds.to_cny(p.market_value or 0, p.currency or "USD", fx) for p in equity_positions)
@@ -62,6 +63,31 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         acc_fund_cash_cny = sum(mds.to_cny(p.market_value or 0, p.currency or "USD", fx) for p in fund_positions)
         acc_cash_cny = mds.to_cny(acc_cash, acc_cash_currency, fx) + acc_fund_cash_cny
         acc_total_assets_cny = acc_mv_cny + acc_cash_cny
+
+        # ── Sell Put 按行权处理：仓位率中将空头 put 替换为行权价股票市值 ──
+        # 空头 put：数量 < 0，option_right == "P"，有行权价
+        short_puts = [
+            p for p in equity_positions
+            if (p.option_right or "").upper() == "P"
+            and (p.quantity or 0) < 0
+            and (p.option_strike or 0) > 0
+        ]
+        # 每张空头 put 的行权成本 = 行权价 × 乘数 × 合约数（绝对值）
+        short_put_exercise_cny = sum(
+            mds.to_cny(
+                (p.option_strike or 0) * (p.option_multiplier or 100) * abs(p.quantity or 0),
+                p.currency or "USD", fx,
+            )
+            for p in short_puts
+        )
+        # 去掉空头 put 的负市值，换成行权价对应的股票市值
+        short_put_mv_cny = sum(
+            mds.to_cny(p.market_value or 0, p.currency or "USD", fx)
+            for p in short_puts
+        )
+        equity_for_ratio_cny = acc_mv_cny - short_put_mv_cny + short_put_exercise_cny
+
+        acc_equity_ratio = round(equity_for_ratio_cny / acc_total_assets_cny * 100, 1) if acc_total_assets_cny > 0 else 0
 
         account_summaries.append(AccountSummary(
             account=account,
@@ -86,6 +112,8 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         total_cost_cny += acc_cost_cny
         total_pnl_cny += acc_pnl_cny
         total_cash_cny += acc_cash_cny
+        total_short_put_exercise_cny += short_put_exercise_cny
+        total_short_put_mv_cny += short_put_mv_cny
 
         # 按市场统计（折算人民币，仅股票持仓）
         for p in equity_positions:
@@ -109,7 +137,9 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
     total_pnl_pct = (total_pnl_cny / total_cost_cny * 100) if total_cost_cny > 0 else 0
     total_cash = sum(a.cash_balance for a in account_summaries)
     total_assets = total_market_value + total_cash
-    equity_ratio = round(total_market_value_cny / total_assets_cny * 100, 1) if total_assets_cny > 0 else 0
+    # 全局仓位率：sell put 按行权替换（去掉负市值，换入行权价股票市值）
+    total_equity_for_ratio_cny = total_market_value_cny - total_short_put_mv_cny + total_short_put_exercise_cny
+    equity_ratio = round(total_equity_for_ratio_cny / total_assets_cny * 100, 1) if total_assets_cny > 0 else 0
 
     # 市场分布占比用 CNY 计算
     for market, data in by_market.items():

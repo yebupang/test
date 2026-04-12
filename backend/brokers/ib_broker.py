@@ -117,19 +117,24 @@ class IBBroker:
                     pnl = market_val - avg_cost * qty
                     pnl_pct = (pnl / (avg_cost * qty) * 100) if avg_cost * qty != 0 else 0
                     name = self._format_option_name(contract)
+                    option_right = (getattr(contract, "right", "") or "").upper()
+                    option_strike = float(getattr(contract, "strike", 0) or 0)
                     result.append({
                         "symbol": symbol,
                         "name": name,
                         "market": market,
                         "currency": currency,
                         "quantity": qty,
-                        "cost_price": avg_cost,         # 每张合约成本（含乘数）
-                        "current_price": option_premium, # 权利金单价
+                        "cost_price": avg_cost,          # 每张合约成本（含乘数）
+                        "current_price": option_premium,  # 权利金单价
                         "market_value": market_val,
                         "unrealized_pnl": pnl,
                         "unrealized_pnl_pct": pnl_pct,
                         "broker": "ib",
                         "is_cash_equivalent": False,
+                        "option_right": option_right or None,
+                        "option_strike": option_strike if option_strike > 0 else None,
+                        "option_multiplier": multiplier,
                     })
                 else:
                     # 股票 / 基金

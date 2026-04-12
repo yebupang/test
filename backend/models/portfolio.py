@@ -81,6 +81,11 @@ class Position(Base):
     # 资产类型标记：货币基金/现金类持仓不计入股票仓位
     is_cash_equivalent = Column(Boolean, default=False)
 
+    # 期权专属字段（非期权持仓留 NULL）
+    option_right = Column(String(1))    # "C" 或 "P"
+    option_strike = Column(Float)       # 行权价
+    option_multiplier = Column(Float)   # 合约乘数，美股通常为 100
+
     # 元数据
     is_active = Column(Boolean, default=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

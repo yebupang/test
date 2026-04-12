@@ -40,6 +40,10 @@ async def _run_migrations():
     migrations = [
         # 2025-04: 货币基金标记列
         "ALTER TABLE positions ADD COLUMN is_cash_equivalent BOOLEAN DEFAULT 0",
+        # 2025-04: 期权专属字段
+        "ALTER TABLE positions ADD COLUMN option_right VARCHAR(1)",
+        "ALTER TABLE positions ADD COLUMN option_strike FLOAT",
+        "ALTER TABLE positions ADD COLUMN option_multiplier FLOAT",
     ]
     async with engine.begin() as conn:
         for sql in migrations:
