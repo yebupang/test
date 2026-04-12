@@ -9,6 +9,7 @@
 
 import asyncio
 import logging
+import math
 from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,12 @@ class IBBroker:
             contracts = [p.contract for p in positions]
             if contracts:
                 tickers = self._ib.reqTickers(*contracts)
-                price_map = {t.contract.symbol: t.marketPrice() for t in tickers}
+                # marketPrice() 在休市时返回 NaN，过滤掉无效值
+                price_map = {
+                    t.contract.symbol: t.marketPrice()
+                    for t in tickers
+                    if t.marketPrice() is not None and not math.isnan(t.marketPrice())
+                }
             else:
                 price_map = {}
 
@@ -89,14 +95,15 @@ class IBBroker:
             for pos in positions:
                 contract = pos.contract
                 symbol = contract.symbol
-                if contract.secType != "STK":
+                if contract.secType not in ("STK", "FUND"):
                     continue
 
                 market = self._detect_market(contract)
                 currency = contract.currency or "USD"
                 avg_cost = float(pos.avgCost or 0)
                 qty = float(pos.position or 0)
-                cur_price = price_map.get(symbol, 0) or 0
+                # 休市时 price_map 中无该 symbol，回退到均价作为当前价
+                cur_price = price_map.get(symbol) or avg_cost
                 market_val = cur_price * qty
                 pnl = (cur_price - avg_cost) * qty
                 pnl_pct = ((cur_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0

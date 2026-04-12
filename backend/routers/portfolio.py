@@ -65,7 +65,7 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
 
         account_summaries.append(AccountSummary(
             account=account,
-            positions=positions,
+            positions=equity_positions,  # 仅股票持仓，货基合成持仓不暴露给前端
             total_market_value=acc_market_value,
             total_cost=acc_cost,
             total_pnl=acc_pnl,
