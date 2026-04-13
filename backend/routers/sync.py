@@ -96,6 +96,34 @@ async def sync_pdf(
         raise HTTPException(500, f"PDF 导入失败: {e}")
 
 
+@router.post("/pdf/debug", summary="调试：返回 PDF 原始提取内容")
+async def debug_pdf(file: UploadFile = File(...)):
+    """上传 PDF，返回原始文本和表格结构，用于排查解析问题"""
+    import fitz
+    content = await file.read()
+    doc = fitz.open(stream=content, filetype="pdf")
+    result = []
+    for page_num, page in enumerate(doc, start=1):
+        page_info: dict = {"page": page_num, "tables": [], "text_lines": []}
+        # 表格
+        try:
+            tabs = page.find_tables()
+            for i, tab in enumerate(tabs.tables):
+                rows = tab.extract()
+                page_info["tables"].append({
+                    "index": i,
+                    "rows": rows,
+                })
+        except Exception as e:
+            page_info["tables_error"] = str(e)
+        # 纯文本（前 3000 字符）
+        text = page.get_text()
+        page_info["text_lines"] = text[:3000].splitlines()
+        result.append(page_info)
+    doc.close()
+    return result
+
+
 @router.post("/quotes/refresh")
 async def refresh_quotes(account_id: int | None = None, db: AsyncSession = Depends(get_db)):
     """刷新所有持仓的实时行情（AKShare）"""
