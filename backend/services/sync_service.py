@@ -109,6 +109,31 @@ class SyncService:
             await self.db.commit()
             raise
 
+    async def sync_pdf(self, account_id: int, pdf_content: bytes) -> Dict[str, Any]:
+        """从华宝证券持仓申报单 PDF 同步持仓"""
+        log = SyncLog(broker="csv", status="running", started_at=datetime.utcnow())
+        self.db.add(log)
+        await self.db.commit()
+
+        try:
+            from brokers.pdf_importer import parse_huabao_pdf
+            positions_data, errors = parse_huabao_pdf(pdf_content)
+            count = await self._upsert_positions(account_id, positions_data)
+
+            log.status = "success" if not errors else "partial"
+            log.positions_updated = count
+            log.message = f"PDF 导入 {count} 条，{len(errors)} 条错误" + (f": {'; '.join(errors[:3])}" if errors else "")
+            log.finished_at = datetime.utcnow()
+            await self.db.commit()
+            return {"status": log.status, "positions_updated": count, "errors": errors}
+
+        except Exception as e:
+            log.status = "failed"
+            log.message = str(e)
+            log.finished_at = datetime.utcnow()
+            await self.db.commit()
+            raise
+
     async def refresh_quotes(self, account_id: int | None = None) -> int:
         """刷新所有持仓的实时行情"""
         query = select(Position).where(Position.is_active == True)

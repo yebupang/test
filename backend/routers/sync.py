@@ -73,6 +73,29 @@ async def sync_csv(
         raise HTTPException(500, f"CSV 导入失败: {e}")
 
 
+@router.post("/pdf/{account_id}", response_model=CSVImportResult)
+async def sync_pdf(
+    account_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """上传华宝证券持仓申报单 PDF，导入 A股/港股/基金持仓"""
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(400, "请上传 .pdf 格式文件")
+
+    content = await file.read()
+    svc = SyncService(db)
+    try:
+        result = await svc.sync_pdf(account_id, content)
+        return CSVImportResult(
+            total=result["positions_updated"],
+            imported=result["positions_updated"],
+            errors=result.get("errors", []),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"PDF 导入失败: {e}")
+
+
 @router.post("/quotes/refresh")
 async def refresh_quotes(account_id: int | None = None, db: AsyncSession = Depends(get_db)):
     """刷新所有持仓的实时行情（AKShare）"""
