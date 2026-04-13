@@ -53,6 +53,17 @@ export const syncCSV = async (accountId: number, file: File) => {
   return res.json();
 };
 
+export const syncPDF = async (accountId: number, file: File) => {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/sync/pdf/${accountId}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error("PDF 上传失败");
+  return res.json();
+};
+
 // ─── Strategy ─────────────────────────────────────────────
 export const getStrategies = () => request("/strategies/");
 export const getStrategy = (id: number) => request(`/strategies/${id}`);
