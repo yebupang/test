@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { syncFutu, syncIB, syncMock, syncCSV, syncPDF, refreshQuotes, getSyncLogs } from "@/lib/api";
+import { syncFutu, syncIB, syncMock, syncCSV, syncPDF, syncImage, refreshQuotes, getSyncLogs } from "@/lib/api";
 import { SyncLog } from "@/lib/types";
 import useSWR from "swr";
 import { RefreshCw, Upload, Wifi, WifiOff } from "lucide-react";
@@ -45,10 +45,14 @@ export default function SyncPanel({ accounts, onSynced }: Props) {
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !csvAccount) return;
-    const isPDF = file.name.toLowerCase().endsWith(".pdf");
-    await withLoading("csv", () =>
-      isPDF ? syncPDF(csvAccount.id, file) : syncCSV(csvAccount.id, file)
-    );
+    const name = file.name.toLowerCase();
+    const isPDF = name.endsWith(".pdf");
+    const isImage = /\.(jpe?g|png|webp|gif)$/.test(name);
+    await withLoading("csv", () => {
+      if (isPDF) return syncPDF(csvAccount.id, file);
+      if (isImage) return syncImage(csvAccount.id, file);
+      return syncCSV(csvAccount.id, file);
+    });
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -76,7 +80,7 @@ export default function SyncPanel({ accounts, onSynced }: Props) {
         />
         <SyncBtn
           label="A股导入"
-          sub="CSV / PDF"
+          sub="CSV / PDF / 截图"
           icon={<Upload size={16} />}
           loading={loading === "csv"}
           disabled={!csvAccount}
@@ -105,7 +109,7 @@ export default function SyncPanel({ accounts, onSynced }: Props) {
       )}
 
       {/* 隐藏的文件上传 */}
-      <input ref={fileRef} type="file" accept=".csv,.pdf" className="hidden" onChange={handleFile} />
+      <input ref={fileRef} type="file" accept=".csv,.pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleFile} />
 
       {/* 状态消息 */}
       {message && (

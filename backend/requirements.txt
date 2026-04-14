@@ -23,3 +23,4 @@ ib_insync==0.9.86
 python-multipart==0.0.9
 pytz==2024.1
 pymupdf>=1.24.0   # PDF 解析（华宝持仓申报单）
+anthropic>=0.40.0 # Claude Vision API（持仓截图 OCR）

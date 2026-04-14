@@ -96,6 +96,33 @@ async def sync_pdf(
         raise HTTPException(500, f"PDF 导入失败: {e}")
 
 
+@router.post("/image/{account_id}", response_model=CSVImportResult)
+async def sync_image(
+    account_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """上传华宝证券 APP 持仓截图（JPG/PNG），OCR 识别并导入持仓"""
+    filename = (file.filename or "").lower()
+    if not any(filename.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
+        raise HTTPException(400, "请上传图片文件（JPG/PNG/WEBP）")
+
+    content = await file.read()
+    from brokers.image_importer import media_type_from_filename
+    media_type = media_type_from_filename(file.filename or "image.jpg")
+
+    svc = SyncService(db)
+    try:
+        result = await svc.sync_image(account_id, content, media_type)
+        return CSVImportResult(
+            total=result["positions_updated"],
+            imported=result["positions_updated"],
+            errors=result.get("errors", []),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"截图导入失败: {e}")
+
+
 @router.post("/pdf/debug", summary="调试：返回 PDF 原始提取内容")
 async def debug_pdf(file: UploadFile = File(...)):
     """上传 PDF，返回原始文本和表格结构，用于排查解析问题"""
