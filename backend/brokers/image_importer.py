@@ -3,15 +3,12 @@
 
 使用 Claude Vision API 从持仓页面截图中提取持仓数据。
 支持格式：华宝证券 APP「持仓」页面截图（PNG/JPG/JPEG/WEBP）
+支持多张截图同时上传，自动去重（同一证券代码只保留一条）。
 
 截图格式示例：
   腾讯控股        560.472    900    -52831.08
   00700.HK        493.200    900    -12.00%    9.52%
   387329.69
-
-  通信ETF         1.161     41900   +3253.07
-  515880.SH       1.239     41900   +6.69%    1.28%
-  51914.10
 
 代码格式：XXXXX.HK → HK市场；XXXXXX.SH / XXXXXX.SZ → A股
 市值为人民币元（非万元）。
@@ -81,35 +78,13 @@ def media_type_from_filename(filename: str) -> str:
     return _MEDIA_TYPES.get(ext, "image/jpeg")
 
 
-def parse_huabao_image(
-    content: bytes,
-    media_type: str = "image/jpeg",
-) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """
-    解析华宝证券 APP 持仓截图。
-
-    :param content:    图片文件字节内容
-    :param media_type: 图片 MIME 类型，如 image/jpeg 或 image/png
-    :return:           (持仓列表, 错误信息列表)
-    """
-    try:
-        import anthropic
-    except ImportError:
-        raise RuntimeError("anthropic 未安装，请运行: pip install anthropic")
-
-    positions: List[Dict[str, Any]] = []
+def _ocr_one_image(client, content: bytes, media_type: str) -> Tuple[List[Dict], List[str]]:
+    """调用 Claude 对单张图片做 OCR，返回原始持仓列表和错误列表。"""
+    positions: List[Dict] = []
     errors: List[str] = []
 
     try:
-        from config import get_settings
-        settings = get_settings()
-        client_kwargs = {}
-        if settings.anthropic_api_key:
-            client_kwargs["api_key"] = settings.anthropic_api_key
-
-        client = anthropic.Anthropic(**client_kwargs)
         image_b64 = base64.standard_b64encode(content).decode("utf-8")
-
         response = client.messages.create(
             model="claude-haiku-4-5",
             max_tokens=4096,
@@ -130,37 +105,31 @@ def parse_huabao_image(
         )
 
         text = next((b.text for b in response.content if b.type == "text"), "")
-        logger.debug(f"Claude OCR 原始响应: {text[:500]}")
+        logger.debug(f"Claude OCR 响应(前500字): {text[:500]}")
 
-        # 提取 JSON（允许 Claude 输出前后有少量文字）
         json_match = re.search(r'\{[\s\S]*\}', text)
         if not json_match:
-            errors.append(f"Claude 返回内容无法解析为 JSON: {text[:300]}")
+            errors.append(f"Claude 返回内容无法解析为 JSON: {text[:200]}")
             return positions, errors
 
         data = json.loads(json_match.group())
-        raw_positions = data.get("positions", [])
-
-        for item in raw_positions:
+        for item in data.get("positions", []):
             try:
                 code = str(item.get("code") or "").strip()
                 if not re.match(r'^\d{5,6}$', code):
                     continue
-
-                name         = str(item.get("name") or "").strip()
-                market       = str(item.get("market") or "A").strip().upper()
-                market_value = float(item.get("market_value") or 0)
-                cost_price   = float(item.get("cost_price") or 0)
+                name          = str(item.get("name") or "").strip()
+                market        = str(item.get("market") or "A").strip().upper()
+                market_value  = float(item.get("market_value") or 0)
+                cost_price    = float(item.get("cost_price") or 0)
                 current_price = float(item.get("current_price") or 0)
-                quantity     = float(item.get("quantity") or 0)
-
+                quantity      = float(item.get("quantity") or 0)
                 if quantity <= 0 or market_value <= 0:
                     continue
-
                 positions.append({
                     "symbol":             code,
                     "name":               name,
-                    "market":             market if market == "HK" else "A",
+                    "market":             "HK" if market == "HK" else "A",
                     "currency":           "CNY",
                     "quantity":           quantity,
                     "cost_price":         cost_price,
@@ -172,14 +141,82 @@ def parse_huabao_image(
                     "is_cash_equivalent": is_cash_equivalent(code, name),
                 })
             except Exception as e:
-                errors.append(f"持仓项解析错误: {e}，原始数据: {item}")
-
+                errors.append(f"持仓项解析错误: {e}，原始: {item}")
     except Exception as e:
         errors.append(f"图片 OCR 失败: {e}")
         logger.exception("图片 OCR 解析异常")
 
-    if not positions and not errors:
-        errors.append("未从截图中解析到持仓数据，请确认截图为华宝证券「持仓」页面")
-
-    logger.info(f"图片 OCR 导入: {len(positions)} 条持仓，{len(errors)} 条错误")
     return positions, errors
+
+
+def _merge_positions(all_positions: List[Dict]) -> List[Dict]:
+    """
+    跨图片去重：同一 symbol 只保留一条。
+    优先保留 cost_price 不为 0 的条目；若均为 0 则保留 market_value 较大的。
+    """
+    best: Dict[str, Dict] = {}
+    for pos in all_positions:
+        sym = pos["symbol"]
+        if sym not in best:
+            best[sym] = pos
+        else:
+            prev = best[sym]
+            # 优先保留 cost_price 非零的
+            if prev["cost_price"] == 0 and pos["cost_price"] != 0:
+                best[sym] = pos
+            # 同为零或同为非零时，保留 market_value 较大的（数据更完整）
+            elif prev["cost_price"] == pos["cost_price"] == 0:
+                if pos["market_value"] > prev["market_value"]:
+                    best[sym] = pos
+    return list(best.values())
+
+
+def parse_huabao_images(
+    images: List[Tuple[bytes, str]],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    解析一组华宝证券 APP 持仓截图，自动合并并去重。
+
+    :param images: [(图片字节, media_type), ...]
+    :return:       (去重后的持仓列表, 所有错误列表)
+    """
+    try:
+        import anthropic
+    except ImportError:
+        raise RuntimeError("anthropic 未安装，请运行: pip install anthropic")
+
+    from config import get_settings
+    settings = get_settings()
+    client_kwargs = {}
+    if settings.anthropic_api_key:
+        client_kwargs["api_key"] = settings.anthropic_api_key
+    client = anthropic.Anthropic(**client_kwargs)
+
+    all_positions: List[Dict] = []
+    all_errors: List[str] = []
+
+    for idx, (content, media_type) in enumerate(images, start=1):
+        logger.info(f"正在 OCR 第 {idx}/{len(images)} 张截图 ({media_type})")
+        positions, errors = _ocr_one_image(client, content, media_type)
+        all_positions.extend(positions)
+        all_errors.extend([f"图片{idx}: {e}" for e in errors])
+
+    merged = _merge_positions(all_positions)
+
+    if not merged and not all_errors:
+        all_errors.append("未从截图中解析到持仓数据，请确认截图为华宝证券「持仓」页面")
+
+    logger.info(
+        f"截图批量导入: {len(images)} 张图片，"
+        f"原始 {len(all_positions)} 条 → 去重后 {len(merged)} 条，"
+        f"{len(all_errors)} 条错误"
+    )
+    return merged, all_errors
+
+
+# ── 单图片入口（向后兼容）────────────────────────────────────────────────
+def parse_huabao_image(
+    content: bytes,
+    media_type: str = "image/jpeg",
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    return parse_huabao_images([(content, media_type)])

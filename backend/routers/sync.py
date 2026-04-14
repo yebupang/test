@@ -99,21 +99,23 @@ async def sync_pdf(
 @router.post("/image/{account_id}", response_model=CSVImportResult)
 async def sync_image(
     account_id: int,
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """上传华宝证券 APP 持仓截图（JPG/PNG），OCR 识别并导入持仓"""
-    filename = (file.filename or "").lower()
-    if not any(filename.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
-        raise HTTPException(400, "请上传图片文件（JPG/PNG/WEBP）")
-
-    content = await file.read()
+    """上传华宝证券 APP 持仓截图（JPG/PNG），支持多张，OCR 识别并导入持仓"""
     from brokers.image_importer import media_type_from_filename
-    media_type = media_type_from_filename(file.filename or "image.jpg")
+    images = []
+    for file in files:
+        filename = (file.filename or "").lower()
+        if not any(filename.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
+            raise HTTPException(400, f"请上传图片文件（JPG/PNG/WEBP），不支持: {file.filename}")
+        content = await file.read()
+        media_type = media_type_from_filename(file.filename or "image.jpg")
+        images.append((content, media_type))
 
     svc = SyncService(db)
     try:
-        result = await svc.sync_image(account_id, content, media_type)
+        result = await svc.sync_image(account_id, images)
         return CSVImportResult(
             total=result["positions_updated"],
             imported=result["positions_updated"],

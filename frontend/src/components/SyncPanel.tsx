@@ -43,15 +43,21 @@ export default function SyncPanel({ accounts, onSynced }: Props) {
   const mockAccount = accounts.find((a) => a.broker === "mock") || accounts[0];
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !csvAccount) return;
-    const name = file.name.toLowerCase();
-    const isPDF = name.endsWith(".pdf");
-    const isImage = /\.(jpe?g|png|webp|gif)$/.test(name);
+    const files = Array.from(e.target.files || []);
+    if (!files.length || !csvAccount) return;
+
+    // If any file is a PDF, handle individually (only one PDF at a time)
+    // If all are images, send them all at once
+    // Otherwise treat first file as CSV
+    const firstFile = files[0];
+    const firstName = firstFile.name.toLowerCase();
+    const isPDF = firstName.endsWith(".pdf");
+    const allImages = files.every(f => /\.(jpe?g|png|webp|gif)$/i.test(f.name));
+
     await withLoading("csv", () => {
-      if (isPDF) return syncPDF(csvAccount.id, file);
-      if (isImage) return syncImage(csvAccount.id, file);
-      return syncCSV(csvAccount.id, file);
+      if (isPDF) return syncPDF(csvAccount.id, firstFile);
+      if (allImages) return syncImage(csvAccount.id, files);
+      return syncCSV(csvAccount.id, firstFile);
     });
     if (fileRef.current) fileRef.current.value = "";
   };
@@ -109,7 +115,7 @@ export default function SyncPanel({ accounts, onSynced }: Props) {
       )}
 
       {/* 隐藏的文件上传 */}
-      <input ref={fileRef} type="file" accept=".csv,.pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleFile} />
+      <input ref={fileRef} type="file" accept=".csv,.pdf,.jpg,.jpeg,.png,.webp" multiple className="hidden" onChange={handleFile} />
 
       {/* 状态消息 */}
       {message && (

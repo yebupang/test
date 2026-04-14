@@ -64,9 +64,12 @@ export const syncPDF = async (accountId: number, file: File) => {
   return res.json();
 };
 
-export const syncImage = async (accountId: number, file: File) => {
+export const syncImage = async (accountId: number, files: File | File[]) => {
   const form = new FormData();
-  form.append("file", file);
+  const fileList = Array.isArray(files) ? files : [files];
+  for (const f of fileList) {
+    form.append("files", f);
+  }
   const res = await fetch(`${BASE}/sync/image/${accountId}`, {
     method: "POST",
     body: form,
