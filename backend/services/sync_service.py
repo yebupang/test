@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from models.portfolio import Account, Position, SyncLog
 from services.market_data import MarketDataService
 from config import get_settings
@@ -93,6 +93,7 @@ class SyncService:
         try:
             from brokers.csv_importer import parse_ths_csv
             positions_data, errors = parse_ths_csv(csv_content)
+            await self._deactivate_csv_positions(account_id)
             count = await self._upsert_positions(account_id, positions_data)
 
             log.status = "success" if not errors else "partial"
@@ -118,6 +119,7 @@ class SyncService:
         try:
             from brokers.pdf_importer import parse_huabao_pdf
             positions_data, errors = parse_huabao_pdf(pdf_content)
+            await self._deactivate_csv_positions(account_id)
             count = await self._upsert_positions(account_id, positions_data)
 
             log.status = "success" if not errors else "partial"
@@ -143,6 +145,7 @@ class SyncService:
         try:
             from brokers.image_importer import parse_huabao_images
             positions_data, account_summary, errors = parse_huabao_images(images)
+            await self._deactivate_csv_positions(account_id)
             count = await self._upsert_positions(account_id, positions_data)
 
             # 同步A股现金余额（账户资产 - 证券市值 - 理财资产）
@@ -209,6 +212,15 @@ class SyncService:
 
         await self.db.commit()
         return updated
+
+    async def _deactivate_csv_positions(self, account_id: int) -> None:
+        """将该账户下所有 broker='csv' 的持仓标为非活跃。
+        用于 A股导入前清空旧数据，不影响富途/盈透持仓。"""
+        await self.db.execute(
+            update(Position)
+            .where(Position.account_id == account_id, Position.broker == "csv")
+            .values(is_active=False)
+        )
 
     async def _upsert_positions(self, account_id: int, positions_data: List[Dict]) -> int:
         """批量更新或插入持仓数据"""
