@@ -18,7 +18,7 @@ import base64
 import json
 import logging
 import re
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 from brokers.cash_equivalents import is_cash_equivalent
 
@@ -34,9 +34,15 @@ _MEDIA_TYPES = {
 }
 
 _PROMPT = """\
-这是一张华宝证券 APP「持仓」页面的截图。请提取所有可见持仓的信息。
+这是一张华宝证券 APP「持仓」页面的截图。请提取账户汇总信息和所有可见持仓的信息。
 
-每个持仓通常显示为：
+【账户汇总】页面顶部通常显示：
+- 账户资产（总资产，人民币元）
+- 证券市值（股票+基金市值，人民币元）
+- 理财资产（货币基金/理财产品市值，人民币元）
+如果页面顶部被遮挡或不可见，对应字段填 null。
+
+【持仓明细】每个持仓通常显示为：
 - 第1行：证券名称
 - 第2行：代码.市场（如 00700.HK、515880.SH、159201.SZ）及成本价、持仓数量、盈亏
 - 第3行：市值（人民币元）及现价
@@ -51,12 +57,17 @@ _PROMPT = """\
 - quantity: 持仓数量（数字）
 
 注意：
-- 只提取持仓明细行，忽略汇总行（账户资产、总市值等顶部信息）
+- 持仓明细只提取个股/基金条目，不要把汇总行当成持仓
 - 市值是绝对金额（人民币元），不是万元
 - 如果某字段看不清，填 null
 
 以下面的 JSON 格式返回，只返回 JSON，不要其他文字：
 {
+  "summary": {
+    "account_assets": 520000.00,
+    "securities_value": 480000.00,
+    "wealth_management": 20000.00
+  },
   "positions": [
     {
       "code": "00700",
@@ -78,9 +89,16 @@ def media_type_from_filename(filename: str) -> str:
     return _MEDIA_TYPES.get(ext, "image/jpeg")
 
 
-def _ocr_one_image(client, content: bytes, media_type: str) -> Tuple[List[Dict], List[str]]:
-    """调用 Claude 对单张图片做 OCR，返回原始持仓列表和错误列表。"""
+def _ocr_one_image(
+    client, content: bytes, media_type: str
+) -> Tuple[List[Dict], Optional[Dict[str, float]], List[str]]:
+    """调用 Claude 对单张图片做 OCR，返回 (持仓列表, 账户汇总, 错误列表)。
+
+    账户汇总格式: {"account_assets": float, "securities_value": float, "wealth_management": float}
+    若页面未显示汇总信息则返回 None。
+    """
     positions: List[Dict] = []
+    summary: Optional[Dict[str, float]] = None
     errors: List[str] = []
 
     try:
@@ -110,9 +128,26 @@ def _ocr_one_image(client, content: bytes, media_type: str) -> Tuple[List[Dict],
         json_match = re.search(r'\{[\s\S]*\}', text)
         if not json_match:
             errors.append(f"Claude 返回内容无法解析为 JSON: {text[:200]}")
-            return positions, errors
+            return positions, summary, errors
 
         data = json.loads(json_match.group())
+
+        # ── 账户汇总 ──────────────────────────────────────────────────
+        raw_summary = data.get("summary") or {}
+        account_assets      = raw_summary.get("account_assets")
+        securities_value    = raw_summary.get("securities_value")
+        wealth_management   = raw_summary.get("wealth_management")
+        if account_assets is not None:
+            try:
+                summary = {
+                    "account_assets":    float(account_assets),
+                    "securities_value":  float(securities_value or 0),
+                    "wealth_management": float(wealth_management or 0),
+                }
+            except Exception as e:
+                errors.append(f"账户汇总解析错误: {e}")
+
+        # ── 持仓明细 ──────────────────────────────────────────────────
         for item in data.get("positions", []):
             try:
                 code = str(item.get("code") or "").strip()
@@ -146,7 +181,7 @@ def _ocr_one_image(client, content: bytes, media_type: str) -> Tuple[List[Dict],
         errors.append(f"图片 OCR 失败: {e}")
         logger.exception("图片 OCR 解析异常")
 
-    return positions, errors
+    return positions, summary, errors
 
 
 def _merge_positions(all_positions: List[Dict]) -> List[Dict]:
@@ -171,14 +206,37 @@ def _merge_positions(all_positions: List[Dict]) -> List[Dict]:
     return list(best.values())
 
 
+def _merge_summary(
+    summaries: List[Dict[str, float]],
+) -> Optional[Dict[str, float]]:
+    """
+    合并多张截图的账户汇总：取 account_assets 最大的一条（截图最完整的）。
+    计算 A股现金 = 账户资产 - 证券市值 - 理财资产。
+    """
+    if not summaries:
+        return None
+    best = max(summaries, key=lambda s: s["account_assets"])
+    cash = best["account_assets"] - best["securities_value"] - best["wealth_management"]
+    return {
+        "account_assets":    best["account_assets"],
+        "securities_value":  best["securities_value"],
+        "wealth_management": best["wealth_management"],
+        "cash":              round(cash, 2),
+    }
+
+
 def parse_huabao_images(
     images: List[Tuple[bytes, str]],
-) -> Tuple[List[Dict[str, Any]], List[str]]:
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, float]], List[str]]:
     """
     解析一组华宝证券 APP 持仓截图，自动合并并去重。
 
     :param images: [(图片字节, media_type), ...]
-    :return:       (去重后的持仓列表, 所有错误列表)
+    :return:       (去重后的持仓列表, 账户汇总含cash字段或None, 所有错误列表)
+
+    账户汇总示例:
+    {"account_assets": 520000, "securities_value": 480000,
+     "wealth_management": 20000, "cash": 20000}
     """
     try:
         import anthropic
@@ -193,30 +251,35 @@ def parse_huabao_images(
     client = anthropic.Anthropic(**client_kwargs)
 
     all_positions: List[Dict] = []
+    all_summaries: List[Dict[str, float]] = []
     all_errors: List[str] = []
 
     for idx, (content, media_type) in enumerate(images, start=1):
         logger.info(f"正在 OCR 第 {idx}/{len(images)} 张截图 ({media_type})")
-        positions, errors = _ocr_one_image(client, content, media_type)
+        positions, summary, errors = _ocr_one_image(client, content, media_type)
         all_positions.extend(positions)
+        if summary:
+            all_summaries.append(summary)
         all_errors.extend([f"图片{idx}: {e}" for e in errors])
 
     merged = _merge_positions(all_positions)
+    account_summary = _merge_summary(all_summaries)
 
     if not merged and not all_errors:
         all_errors.append("未从截图中解析到持仓数据，请确认截图为华宝证券「持仓」页面")
 
+    cash_msg = f"，现金 {account_summary['cash']:.2f} 元" if account_summary else ""
     logger.info(
         f"截图批量导入: {len(images)} 张图片，"
         f"原始 {len(all_positions)} 条 → 去重后 {len(merged)} 条，"
-        f"{len(all_errors)} 条错误"
+        f"{len(all_errors)} 条错误{cash_msg}"
     )
-    return merged, all_errors
+    return merged, account_summary, all_errors
 
 
 # ── 单图片入口（向后兼容）────────────────────────────────────────────────
 def parse_huabao_image(
     content: bytes,
     media_type: str = "image/jpeg",
-) -> Tuple[List[Dict[str, Any]], List[str]]:
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, float]], List[str]]:
     return parse_huabao_images([(content, media_type)])

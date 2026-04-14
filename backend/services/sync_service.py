@@ -142,13 +142,25 @@ class SyncService:
 
         try:
             from brokers.image_importer import parse_huabao_images
-            positions_data, errors = parse_huabao_images(images)
+            positions_data, account_summary, errors = parse_huabao_images(images)
             count = await self._upsert_positions(account_id, positions_data)
+
+            # 同步A股现金余额（账户资产 - 证券市值 - 理财资产）
+            cash_msg = ""
+            if account_summary and account_summary.get("cash") is not None:
+                await self._update_cash(account_id, {
+                    "amount":   account_summary["cash"],
+                    "currency": "CNY",
+                })
+                cash_msg = f"，现金 {account_summary['cash']:.2f} 元"
 
             log.status = "success" if not errors else "partial"
             log.positions_updated = count
             img_count = len(images)
-            log.message = f"{img_count} 张截图导入 {count} 条，{len(errors)} 条错误" + (f": {'; '.join(errors[:3])}" if errors else "")
+            log.message = (
+                f"{img_count} 张截图导入 {count} 条{cash_msg}，{len(errors)} 条错误"
+                + (f": {'; '.join(errors[:3])}" if errors else "")
+            )
             log.finished_at = datetime.utcnow()
             await self.db.commit()
             return {"status": log.status, "positions_updated": count, "errors": errors}
