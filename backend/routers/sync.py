@@ -8,6 +8,9 @@ from services.sync_service import SyncService
 from config import get_settings
 from typing import List
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sync", tags=["数据同步"])
 settings = get_settings()
@@ -157,8 +160,14 @@ async def debug_pdf(file: UploadFile = File(...)):
 async def refresh_quotes(account_id: int | None = None, db: AsyncSession = Depends(get_db)):
     """刷新所有持仓的实时行情（AKShare）"""
     svc = SyncService(db)
-    count = await svc.refresh_quotes(account_id)
-    return {"message": f"已刷新 {count} 条行情"}
+    try:
+        count = await asyncio.wait_for(svc.refresh_quotes(account_id), timeout=120.0)
+        return {"message": f"已刷新 {count} 条行情"}
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "行情刷新超时（120s），请检查网络或稍后重试")
+    except Exception as e:
+        logger.error(f"行情刷新失败: {e}", exc_info=True)
+        raise HTTPException(500, f"行情刷新失败: {e}")
 
 
 @router.get("/logs", response_model=List[SyncLogOut])

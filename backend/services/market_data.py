@@ -61,11 +61,14 @@ class MarketDataService:
             result = {}
             for symbol in symbols:
                 try:
-                    df = await asyncio.to_thread(
-                        ak.stock_us_hist, symbol=symbol, period="daily",
-                        start_date=(datetime.now() - timedelta(days=5)).strftime("%Y%m%d"),
-                        end_date=datetime.now().strftime("%Y%m%d"),
-                        adjust=""
+                    df = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            ak.stock_us_hist, symbol=symbol, period="daily",
+                            start_date=(datetime.now() - timedelta(days=5)).strftime("%Y%m%d"),
+                            end_date=datetime.now().strftime("%Y%m%d"),
+                            adjust=""
+                        ),
+                        timeout=15.0,
                     )
                     if df is not None and not df.empty:
                         row = df.iloc[-1]
@@ -97,11 +100,14 @@ class MarketDataService:
             for symbol in symbols:
                 try:
                     # AKShare 港股代码格式：00700
-                    df = await asyncio.to_thread(
-                        ak.stock_hk_hist, symbol=symbol, period="daily",
-                        start_date=(datetime.now() - timedelta(days=5)).strftime("%Y%m%d"),
-                        end_date=datetime.now().strftime("%Y%m%d"),
-                        adjust=""
+                    df = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            ak.stock_hk_hist, symbol=symbol, period="daily",
+                            start_date=(datetime.now() - timedelta(days=5)).strftime("%Y%m%d"),
+                            end_date=datetime.now().strftime("%Y%m%d"),
+                            adjust=""
+                        ),
+                        timeout=15.0,
                     )
                     if df is not None and not df.empty:
                         row = df.iloc[-1]
@@ -131,7 +137,10 @@ class MarketDataService:
             result = {}
             try:
                 # 批量获取 A 股实时行情
-                df = await asyncio.to_thread(ak.stock_zh_a_spot_em)
+                df = await asyncio.wait_for(
+                    asyncio.to_thread(ak.stock_zh_a_spot_em),
+                    timeout=30.0,
+                )
                 if df is not None and not df.empty:
                     df["代码"] = df["代码"].astype(str).str.zfill(6)
                     for symbol in symbols:
