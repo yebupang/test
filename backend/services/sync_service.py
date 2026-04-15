@@ -225,9 +225,12 @@ class SyncService:
 
     async def _upsert_positions(self, account_id: int, positions_data: List[Dict]) -> int:
         """批量更新或插入持仓数据"""
-        # 先标记该账户所有持仓为非活跃
+        # 先将该账户所有持仓标为非活跃，稍后只把本次同步的持仓重新激活。
+        # 这样卖出后不再出现在同步结果中的持仓会自动隐藏，不再计入总资产。
         await self.db.execute(
-            select(Position).where(Position.account_id == account_id)
+            update(Position)
+            .where(Position.account_id == account_id)
+            .values(is_active=False)
         )
 
         count = 0
