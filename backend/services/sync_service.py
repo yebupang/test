@@ -214,11 +214,12 @@ class SyncService:
         return updated
 
     async def _deactivate_csv_positions(self, account_id: int) -> None:
-        """将该账户下所有 broker='csv' 的持仓标为非活跃。
-        用于 A股导入前清空旧数据，不影响富途/盈透持仓。"""
+        """将该账户下所有持仓标为非活跃。
+        A股、CSV、PDF、截图导入均使用独立账户，直接按 account_id 清空即可，
+        不会影响富途/盈透账户（它们有各自的 account_id）。"""
         await self.db.execute(
             update(Position)
-            .where(Position.account_id == account_id, Position.broker == "csv")
+            .where(Position.account_id == account_id)
             .values(is_active=False)
         )
 

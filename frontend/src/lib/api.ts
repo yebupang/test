@@ -42,40 +42,33 @@ export const refreshQuotes = (accountId?: number) =>
   });
 export const getSyncLogs = () => request("/sync/logs");
 
-export const syncCSV = async (accountId: number, file: File) => {
+async function uploadForm(url: string, form: FormData, label: string) {
+  const res = await fetch(url, { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `${label}上传失败`);
+  }
+  return res.json();
+}
+
+export const syncCSV = (accountId: number, file: File) => {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${BASE}/sync/csv/${accountId}`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) throw new Error("CSV 上传失败");
-  return res.json();
+  return uploadForm(`${BASE}/sync/csv/${accountId}`, form, "CSV");
 };
 
-export const syncPDF = async (accountId: number, file: File) => {
+export const syncPDF = (accountId: number, file: File) => {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${BASE}/sync/pdf/${accountId}`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) throw new Error("PDF 上传失败");
-  return res.json();
+  return uploadForm(`${BASE}/sync/pdf/${accountId}`, form, "PDF");
 };
 
-export const syncImage = async (accountId: number, files: File | File[]) => {
+export const syncImage = (accountId: number, files: File | File[]) => {
   const form = new FormData();
-  const fileList = Array.isArray(files) ? files : [files];
-  for (const f of fileList) {
+  for (const f of (Array.isArray(files) ? files : [files])) {
     form.append("files", f);
   }
-  const res = await fetch(`${BASE}/sync/image/${accountId}`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) throw new Error("截图上传失败");
-  return res.json();
+  return uploadForm(`${BASE}/sync/image/${accountId}`, form, "截图");
 };
 
 // ─── Strategy ─────────────────────────────────────────────
