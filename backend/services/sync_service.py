@@ -233,6 +233,24 @@ class SyncService:
             .values(is_active=False)
         )
 
+        # 在循环前对 positions_data 按 (symbol, market) 去重，防止同一券商数据源重复上报同一持仓。
+        # 优先保留 cost_price 非零的条目；若相同则保留 market_value 较大的。
+        deduped: Dict[tuple, Dict] = {}
+        for data in positions_data:
+            key = (data.get("symbol", "").upper(), data.get("market", ""))
+            existing = deduped.get(key)
+            if existing is None:
+                deduped[key] = data
+            else:
+                prev_cost = existing.get("cost_price") or 0
+                new_cost = data.get("cost_price") or 0
+                if prev_cost == 0 and new_cost != 0:
+                    deduped[key] = data
+                elif prev_cost == new_cost == 0:
+                    if (data.get("market_value") or 0) > (existing.get("market_value") or 0):
+                        deduped[key] = data
+        positions_data = list(deduped.values())
+
         count = 0
         for data in positions_data:
             symbol = data.get("symbol", "").upper()
@@ -251,6 +269,7 @@ class SyncService:
             if pos is None:
                 pos = Position(account_id=account_id, symbol=symbol, market=market)
                 self.db.add(pos)
+                await self.db.flush()  # 写入 DB 使后续 SELECT 能找到，防止同批数据中重复 INSERT
 
             # 更新字段
             for field in ("name", "currency", "quantity", "cost_price", "current_price",

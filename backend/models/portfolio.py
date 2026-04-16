@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey, Enum, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -92,6 +92,10 @@ class Position(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     account = relationship("Account", back_populates="positions")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "symbol", "market", name="uq_position_account_symbol_market"),
+    )
 
 
 class WatchList(Base):
