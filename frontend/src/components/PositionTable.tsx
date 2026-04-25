@@ -48,6 +48,15 @@ function fmtMv(n?: number, currency?: string) {
   return `${sym}${n.toFixed(0)}`;
 }
 
+function fmtPnlAmt(n?: number, currency?: string) {
+  if (n == null) return <span className="text-gray-400">—</span>;
+  const isUp = n > 0;
+  const isFlat = n === 0;
+  const color = isFlat ? "text-gray-400" : isUp ? "text-up" : "text-down";
+  const sign = isUp ? "+" : n < 0 ? "-" : "";
+  return <span className={`font-mono ${color}`}>{sign}{fmtMv(Math.abs(n), currency)}</span>;
+}
+
 export default function PositionTable({ positions, onUpdated }: Props) {
   const [filterMarket, setFilterMarket] = useState<string>("ALL");
   const [sortBy, setSortBy] = useState<keyof Position>("market_value");
@@ -107,10 +116,12 @@ export default function PositionTable({ positions, onUpdated }: Props) {
             <tr className="text-left text-gray-500 border-b border-gray-800">
               <th className="pb-2 pr-4">股票</th>
               <th className="pb-2 pr-4">市场</th>
+              <th className="pb-2 pr-4 text-right">成本价</th>
               <th className="pb-2 pr-4 text-right">现价</th>
               <th className="pb-2 pr-4 text-right">今日</th>
               <th className="pb-2 pr-4 text-right">持仓量</th>
               <th className="pb-2 pr-4 text-right">市值</th>
+              <th className="pb-2 pr-4 text-right">盈亏金额</th>
               <th className="pb-2 pr-4 text-right">盈亏%</th>
               <th className="pb-2 pr-4 text-right">PE</th>
               <th className="pb-2 pr-4 text-right">PB</th>
@@ -127,12 +138,14 @@ export default function PositionTable({ positions, onUpdated }: Props) {
                 <td className="py-3 pr-4">
                   <span className="text-xs text-gray-400">{MARKET_LABELS[pos.market]}</span>
                 </td>
+                <td className="py-3 pr-4 text-right font-mono text-gray-400">{fmtPrice(pos.cost_price, pos.currency)}</td>
                 <td className="py-3 pr-4 text-right font-mono">{fmtPrice(pos.current_price, pos.currency)}</td>
                 <td className="py-3 pr-4 text-right">
                   <PnlBadge value={pos.change_pct ?? 0} />
                 </td>
                 <td className="py-3 pr-4 text-right font-mono text-gray-300">{fmt(pos.quantity, 0)}</td>
                 <td className="py-3 pr-4 text-right font-mono">{fmtMv(pos.market_value, pos.currency)}</td>
+                <td className="py-3 pr-4 text-right">{fmtPnlAmt(pos.unrealized_pnl, pos.currency)}</td>
                 <td className="py-3 pr-4 text-right">
                   <PnlBadge value={pos.unrealized_pnl_pct} />
                 </td>
@@ -205,6 +218,10 @@ export default function PositionTable({ positions, onUpdated }: Props) {
             )}
             <div className="grid grid-cols-3 gap-2 text-sm">
               <div>
+                <p className="text-gray-500 text-xs">成本价</p>
+                <p className="font-mono text-gray-400">{fmtPrice(pos.cost_price, pos.currency)}</p>
+              </div>
+              <div>
                 <p className="text-gray-500 text-xs">现价</p>
                 <p className="font-mono">{fmtPrice(pos.current_price, pos.currency)}</p>
               </div>
@@ -215,6 +232,10 @@ export default function PositionTable({ positions, onUpdated }: Props) {
               <div>
                 <p className="text-gray-500 text-xs">市值</p>
                 <p className="font-mono">{fmtMv(pos.market_value, pos.currency)}</p>
+              </div>
+              <div>
+                <p className="text-gray-500 text-xs">盈亏金额</p>
+                {fmtPnlAmt(pos.unrealized_pnl, pos.currency)}
               </div>
               <div>
                 <p className="text-gray-500 text-xs">盈亏%</p>

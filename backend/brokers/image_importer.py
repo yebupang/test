@@ -161,6 +161,13 @@ def _ocr_one_image(
                 quantity      = float(item.get("quantity") or 0)
                 if quantity <= 0 or market_value <= 0:
                     continue
+                # 由 cost_price 和 current_price 计算盈亏（OCR 不直接给盈亏字段）
+                if cost_price > 0 and current_price > 0:
+                    unrealized_pnl = round((current_price - cost_price) * quantity, 2)
+                    unrealized_pnl_pct = round((current_price - cost_price) / cost_price * 100, 2)
+                else:
+                    unrealized_pnl = 0
+                    unrealized_pnl_pct = 0
                 positions.append({
                     "symbol":             code,
                     "name":               name,
@@ -170,8 +177,8 @@ def _ocr_one_image(
                     "cost_price":         cost_price,
                     "current_price":      current_price,
                     "market_value":       round(market_value, 2),
-                    "unrealized_pnl":     0,
-                    "unrealized_pnl_pct": 0,
+                    "unrealized_pnl":     unrealized_pnl,
+                    "unrealized_pnl_pct": unrealized_pnl_pct,
                     "broker":             "csv",
                     "is_cash_equivalent": is_cash_equivalent(code, name),
                 })
