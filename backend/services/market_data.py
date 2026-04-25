@@ -248,7 +248,7 @@ class MarketDataService:
             return _FX_CACHE
 
         rates: Dict[str, float] = {}
-        for fetcher in (self._fetch_fx_httpx, self._fetch_fx_akshare, self._fetch_fx_futu):
+        for fetcher in (self._fetch_fx_futu, self._fetch_fx_httpx):
             try:
                 rates = await fetcher()
             except Exception as e:
@@ -303,44 +303,6 @@ class MarketDataService:
             return result
         except Exception as e:
             logger.warning(f"open.er-api 汇率获取失败: {e}")
-            return {}
-
-    async def _fetch_fx_akshare(self) -> Dict[str, float]:
-        """
-        通过 AKShare 获取国家外汇管理局（SAFE）人民币中间价。
-        函数：ak.currency_boc_safe()
-        返回列包含 '日期', '美元', '港元' 等；SAFE 中间价是"每 100 外币单位对应人民币"，
-        因此需要除以 100 换算为单位汇率。
-        """
-        try:
-            import akshare as ak
-        except ImportError:
-            logger.warning("akshare 未安装，无法获取 SAFE 汇率")
-            return {}
-        try:
-            df = await asyncio.wait_for(
-                asyncio.to_thread(ak.currency_boc_safe),
-                timeout=15.0,
-            )
-            if df is None or df.empty:
-                logger.warning("currency_boc_safe 返回空")
-                return {}
-            # 取最新一行（按日期排序后的最后一行）
-            df = df.sort_values(by="日期")
-            row = df.iloc[-1]
-            usd_100 = float(row.get("美元") or 0)
-            hkd_100 = float(row.get("港元") or 0)
-            if usd_100 <= 0 or hkd_100 <= 0:
-                logger.warning(f"SAFE 汇率缺失: 美元={usd_100}, 港元={hkd_100}")
-                return {}
-            result = {
-                "USD": usd_100 / 100.0,
-                "HKD": hkd_100 / 100.0,
-            }
-            logger.info(f"SAFE 汇率({row.get('日期')}): {result}")
-            return result
-        except Exception as e:
-            logger.warning(f"AKShare SAFE 汇率获取失败: {e}")
             return {}
 
     async def _fetch_fx_futu(self) -> Dict[str, float]:
