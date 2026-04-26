@@ -3,9 +3,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from database import get_db
 from models.portfolio import Account, Position
-from schemas.portfolio import PortfolioSummary, AccountSummary, PositionOut, PositionUpdate
+from schemas.portfolio import PortfolioSummary, AccountSummary, PositionOut, PositionUpdate, DailySnapshotOut
 from services.market_data import MarketDataService
-from typing import List
+from services.snapshot_service import SnapshotService
+from typing import List, Optional
 
 router = APIRouter(prefix="/portfolio", tags=["持仓组合"])
 
@@ -204,3 +205,24 @@ async def update_position(
     await db.commit()
     await db.refresh(pos)
     return pos
+
+
+# ── 收益历史 ──────────────────────────────────────────────────────────────
+
+@router.get("/profit-history", response_model=List[DailySnapshotOut])
+async def get_profit_history(
+    account_id: Optional[int] = None,
+    days: int = 90,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取收益曲线数据（account_id=None 返回全账户合计）"""
+    svc = SnapshotService(db)
+    return await svc.get_profit_history(account_id, days)
+
+
+@router.post("/snapshot")
+async def trigger_snapshot(db: AsyncSession = Depends(get_db)):
+    """手动触发今日快照（用于测试或补录）"""
+    svc = SnapshotService(db)
+    count = await svc.take_daily_snapshot()
+    return {"message": f"已生成 {count} 行快照"}

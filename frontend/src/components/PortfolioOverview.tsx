@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { PortfolioSummary, MARKET_LABELS, POSITION_TYPE_LABELS } from "@/lib/types";
 import PnlBadge from "./PnlBadge";
+import CashFlowModal from "./CashFlowModal";
+import ProfitChart from "./ProfitChart";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
 
 type DisplayCurrency = "CNY" | "USD" | "HKD";
 
@@ -42,6 +45,7 @@ interface Props {
 
 export default function PortfolioOverview({ data }: Props) {
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("CNY");
+  const [cashFlowAccount, setCashFlowAccount] = useState<{ id: number; name: string } | null>(null);
 
   const fx = data.exchange_rates ?? {};
   const usdRate = fx["USD"] ?? 7.24;
@@ -184,7 +188,17 @@ export default function PortfolioOverview({ data }: Props) {
               const hasFundRow = fundCashCny > 0;
               return (
                 <div key={acc.account.id} className="flex items-center justify-between text-sm">
-                  <span className="text-gray-300">{acc.account.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-300">{acc.account.name}</span>
+                    <button
+                      onClick={() => setCashFlowAccount({ id: acc.account.id, name: acc.account.name })}
+                      className="flex items-center gap-0.5 text-xs text-gray-500 hover:text-indigo-400 transition-colors"
+                      title="记录转入/转出"
+                    >
+                      <ArrowDownLeft size={12} />
+                      <ArrowUpRight size={12} />
+                    </button>
+                  </div>
                   <div className="flex items-center gap-3">
                     <div className="text-right">
                       <div className="text-gray-300 font-mono text-xs">
@@ -223,6 +237,9 @@ export default function PortfolioOverview({ data }: Props) {
           </div>
         </div>
       )}
+
+      {/* 收益曲线 */}
+      <ProfitChart accountId={null} accountName="全账户" />
 
       {/* 图表行 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -336,6 +353,14 @@ export default function PortfolioOverview({ data }: Props) {
           )}
         </div>
       </div>
+      {/* 转入/转出弹窗 */}
+      {cashFlowAccount && (
+        <CashFlowModal
+          accountId={cashFlowAccount.id}
+          accountName={cashFlowAccount.name}
+          onClose={() => setCashFlowAccount(null)}
+        />
+      )}
     </div>
   );
 }

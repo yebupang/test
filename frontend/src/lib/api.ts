@@ -71,6 +71,25 @@ export const syncImage = (accountId: number, files: File | File[]) => {
   return uploadForm(`${BASE}/sync/image/${accountId}`, form, "截图");
 };
 
+// ─── Cash Flows ───────────────────────────────────────────
+export const getCashFlows = (accountId: number) =>
+  request(`/accounts/${accountId}/cashflows`);
+export const addCashFlow = (
+  accountId: number,
+  data: { date: string; kind: string; amount: number; currency: string; note?: string }
+) => request(`/accounts/${accountId}/cashflows`, { method: "POST", body: JSON.stringify(data) });
+export const deleteCashFlow = (accountId: number, cfId: number) =>
+  request(`/accounts/${accountId}/cashflows/${cfId}`, { method: "DELETE" });
+
+// ─── Profit History ───────────────────────────────────────
+export const getProfitHistory = (accountId?: number | null, days = 90) => {
+  const params = new URLSearchParams({ days: String(days) });
+  if (accountId != null) params.set("account_id", String(accountId));
+  return request(`/portfolio/profit-history?${params}`);
+};
+export const triggerSnapshot = () =>
+  request("/portfolio/snapshot", { method: "POST" });
+
 // ─── Strategy ─────────────────────────────────────────────
 export const getStrategies = () => request("/strategies/");
 export const getStrategy = (id: number) => request(`/strategies/${id}`);

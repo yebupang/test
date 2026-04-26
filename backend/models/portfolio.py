@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey, Enum, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey, Enum, UniqueConstraint, Date
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -154,3 +154,38 @@ class SyncLog(Base):
     positions_updated = Column(Integer, default=0)
     started_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime)
+
+
+class CashFlow(Base):
+    """账户资金转入/转出记录"""
+    __tablename__ = "cash_flows"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    date = Column(Date, nullable=False)
+    kind = Column(String(10), nullable=False)        # "deposit" | "withdraw"
+    amount = Column(Float, nullable=False)            # 原币金额
+    currency = Column(String(10), nullable=False)     # 原币币种
+    amount_cny = Column(Float, nullable=False)        # 录入时按当前汇率折算 CNY
+    note = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    account = relationship("Account")
+
+
+class DailySnapshot(Base):
+    """每日资产快照（用于绘制收益曲线）"""
+    __tablename__ = "daily_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True, index=True)  # NULL = 全账户合计
+    total_assets_cny = Column(Float, nullable=False)
+    net_inflow_cny = Column(Float, nullable=False)    # 截至当日的累计净流入（转入 − 转出）
+    profit_cny = Column(Float, nullable=False)        # total_assets_cny − net_inflow_cny
+    return_pct = Column(Float)                        # profit / net_inflow * 100（净流入为0时为 None）
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("date", "account_id", name="uq_snapshot_date_account"),
+    )

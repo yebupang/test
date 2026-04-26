@@ -163,6 +163,27 @@ export interface Strategy {
   updated_at: string;
 }
 
+export interface CashFlow {
+  id: number;
+  account_id: number;
+  date: string;
+  kind: "deposit" | "withdraw";
+  amount: number;
+  currency: string;
+  amount_cny: number;
+  note?: string;
+  created_at: string;
+}
+
+export interface DailySnapshot {
+  date: string;
+  account_id: number | null;
+  total_assets_cny: number;
+  net_inflow_cny: number;
+  profit_cny: number;
+  return_pct: number | null;
+}
+
 export interface ComplianceItem {
   level: "info" | "warning" | "violation";
   category: string;

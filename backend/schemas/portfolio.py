@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
-from datetime import datetime
+from typing import Optional, List, Literal
+from datetime import datetime, date
 
 
 # ─── Account ─────────────────────────────────────────────
@@ -185,3 +185,42 @@ class CSVImportResult(BaseModel):
     total: int
     imported: int
     errors: List[str] = []
+
+
+# ─── Cash Flow ────────────────────────────────────────────
+
+class CashFlowIn(BaseModel):
+    date: date
+    kind: Literal["deposit", "withdraw"]
+    amount: float
+    currency: str
+    note: Optional[str] = None
+
+
+class CashFlowOut(BaseModel):
+    id: int
+    account_id: int
+    date: date
+    kind: str
+    amount: float
+    currency: str
+    amount_cny: float
+    note: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Daily Snapshot ───────────────────────────────────────
+
+class DailySnapshotOut(BaseModel):
+    date: date
+    account_id: Optional[int]
+    total_assets_cny: float
+    net_inflow_cny: float
+    profit_cny: float
+    return_pct: Optional[float]
+
+    class Config:
+        from_attributes = True
