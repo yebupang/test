@@ -80,18 +80,21 @@ class IBBroker:
             positions = self._ib.positions()
             account_values = self._ib.accountValues()
 
-            # 获取当前市价 — 期权用 localSymbol 作为 key，避免同标的多张期权冲突
             contracts = [p.contract for p in positions]
+            # price_map: key → {current_price, prev_close, change_pct, open, high, low}
+            price_map: Dict[str, Dict] = {}
             if contracts:
+                # type 4 = Delayed-Frozen: 返回最后可用价格，无需实时行情订阅
+                try:
+                    self._ib.reqMarketDataType(4)
+                except Exception:
+                    pass
                 tickers = self._ib.reqTickers(*contracts)
-                price_map = {}
                 for t in tickers:
-                    price = t.marketPrice()
-                    if price is not None and not math.isnan(price):
+                    info = self._ticker_info(t)
+                    if info:
                         key = t.contract.localSymbol or t.contract.symbol
-                        price_map[key] = price
-            else:
-                price_map = {}
+                        price_map[key] = info
 
             result = []
             for pos in positions:
@@ -105,14 +108,12 @@ class IBBroker:
                 qty = float(pos.position or 0)
 
                 if contract.secType == "OPT":
-                    # 期权处理：symbol 使用 localSymbol 确保唯一性
                     symbol = contract.localSymbol or contract.symbol
                     multiplier = float(getattr(contract, "multiplier", None) or 100)
-                    # 从 price_map 取权利金；休市时回退到成本权利金（avg_cost / multiplier）
                     price_key = contract.localSymbol or contract.symbol
+                    info = price_map.get(price_key) or {}
                     cost_premium = (avg_cost / multiplier) if multiplier > 0 else avg_cost
-                    option_premium = price_map.get(price_key) or cost_premium
-                    # IB 的 avgCost 已含乘数（每张合约成本 = 权利金 × 乘数）
+                    option_premium = info.get("current_price") or cost_premium
                     market_val = option_premium * multiplier * qty
                     pnl = market_val - avg_cost * qty
                     pnl_pct = (pnl / (avg_cost * qty) * 100) if avg_cost * qty != 0 else 0
@@ -125,8 +126,8 @@ class IBBroker:
                         "market": market,
                         "currency": currency,
                         "quantity": qty,
-                        "cost_price": avg_cost,          # 每张合约成本（含乘数）
-                        "current_price": option_premium,  # 权利金单价
+                        "cost_price": avg_cost,
+                        "current_price": option_premium,
                         "market_value": market_val,
                         "unrealized_pnl": pnl,
                         "unrealized_pnl_pct": pnl_pct,
@@ -140,8 +141,8 @@ class IBBroker:
                     # 股票 / 基金
                     symbol = contract.symbol
                     price_key = contract.localSymbol or symbol
-                    # 休市时 price_map 中无该 symbol，回退到均价作为当前价
-                    cur_price = price_map.get(price_key) or price_map.get(symbol) or avg_cost
+                    info = price_map.get(price_key) or price_map.get(symbol) or {}
+                    cur_price = info.get("current_price") or avg_cost
                     market_val = cur_price * qty
                     pnl = (cur_price - avg_cost) * qty
                     pnl_pct = ((cur_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0
@@ -157,6 +158,11 @@ class IBBroker:
                         "market_value": market_val,
                         "unrealized_pnl": pnl,
                         "unrealized_pnl_pct": pnl_pct,
+                        "prev_close": info.get("prev_close"),
+                        "change_pct": info.get("change_pct"),
+                        "open_price": info.get("open_price"),
+                        "high_price": info.get("high_price"),
+                        "low_price": info.get("low_price"),
                         "broker": "ib",
                         "is_cash_equivalent": is_cash_equivalent(symbol, name),
                     })
@@ -179,6 +185,30 @@ class IBBroker:
             return {"positions": result, "cash": {"amount": cash_amount, "currency": cash_currency}}
         finally:
             self._disconnect()
+
+    def _ticker_info(self, t) -> Dict[str, Any]:
+        """从 ib_insync Ticker 提取价格信息，处理 NaN。返回空 dict 表示无可用价格。"""
+        def _v(x):
+            try:
+                return None if x is None or math.isnan(float(x)) else float(x)
+            except Exception:
+                return None
+
+        mp = _v(t.marketPrice())
+        last = _v(t.last)
+        close = _v(t.close)
+        cur = mp or last or close
+        if cur is None:
+            return {}
+        chg = round((cur - close) / close * 100, 2) if close else None
+        return {
+            "current_price": cur,
+            "prev_close": close,
+            "change_pct": chg,
+            "open_price": _v(t.open),
+            "high_price": _v(t.high),
+            "low_price": _v(t.low),
+        }
 
     def _format_option_name(self, contract) -> str:
         """将 IB 期权合约格式化为可读名称，如 'AAPL C170 2024-01-19'"""

@@ -10,6 +10,7 @@ apscheduler==3.10.4
 
 # 行情数据
 akshare==1.18.53
+yfinance>=0.2.54
 pandas==2.2.2
 numpy==1.26.4
 

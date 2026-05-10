@@ -55,14 +55,65 @@ class MarketDataService:
         return result
 
     async def _get_us_quotes(self, symbols: List[str]) -> Dict[str, Dict]:
-        """美股行情：Futu OpenD 优先（含 PE/PB/change），AKShare 兜底"""
-        result = await self._get_quotes_futu([(s, "US") for s in symbols])
+        """美股行情：yfinance 优先（含 PE/PB/change），Futu 兜底，AKShare 最后"""
+        result = await self._get_us_quotes_yfinance(symbols)
         missing = [s for s in symbols if s not in result or not result[s].get("current_price")]
         if missing:
-            ak_result = await self._get_us_quotes_akshare(missing)
+            futu_result = await self._get_quotes_futu([(s, "US") for s in missing])
+            for s, q in futu_result.items():
+                result.setdefault(s, {}).update({k: v for k, v in q.items() if v is not None})
+        missing2 = [s for s in symbols if s not in result or not result[s].get("current_price")]
+        if missing2:
+            ak_result = await self._get_us_quotes_akshare(missing2)
             for s, q in ak_result.items():
                 result.setdefault(s, {}).update({k: v for k, v in q.items() if v is not None})
         return result
+
+    async def _get_us_quotes_yfinance(self, symbols: List[str]) -> Dict[str, Dict]:
+        """通过 yfinance 批量获取美股行情（含 PE/PB）"""
+        try:
+            import yfinance as yf
+
+            def _fetch():
+                out: Dict[str, Dict] = {}
+                for sym in symbols:
+                    try:
+                        t = yf.Ticker(sym)
+                        info = t.info or {}
+                        cur = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+                        prev = info.get("previousClose") or info.get("regularMarketPreviousClose") or 0
+                        chg = info.get("regularMarketChangePercent") or (
+                            round((cur - prev) / prev * 100, 2) if prev else 0
+                        )
+                        pe = info.get("trailingPE") or info.get("forwardPE") or 0
+                        pb = info.get("priceToBook") or 0
+                        mc = info.get("marketCap") or 0
+                        div = info.get("dividendYield") or 0
+                        h52 = info.get("fiftyTwoWeekHigh") or 0
+                        l52 = info.get("fiftyTwoWeekLow") or 0
+                        if cur and cur > 0:
+                            out[sym] = {
+                                "current_price": float(cur),
+                                "prev_close": float(prev) or None,
+                                "change_pct": float(chg) if chg else None,
+                                "pe_ratio": float(pe) if pe and pe > 0 else None,
+                                "pb_ratio": float(pb) if pb and pb > 0 else None,
+                                "market_cap": float(mc) if mc else None,
+                                "dividend_yield": float(div * 100) if div else None,
+                                "week_52_high": float(h52) if h52 else None,
+                                "week_52_low": float(l52) if l52 else None,
+                            }
+                    except Exception as e:
+                        logger.warning(f"yfinance {sym}: {e}")
+                return out
+
+            return await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=20.0)
+        except ImportError:
+            logger.warning("yfinance 未安装，跳过（运行 pip install yfinance）")
+            return {}
+        except Exception as e:
+            logger.warning(f"yfinance 批量行情失败: {e}")
+            return {}
 
     async def _get_hk_quotes(self, symbols: List[str]) -> Dict[str, Dict]:
         """港股行情：Futu OpenD 优先（含 PE/PB/change），AKShare 兜底"""
@@ -73,6 +124,8 @@ class MarketDataService:
             for s, q in ak_result.items():
                 result.setdefault(s, {}).update({k: v for k, v in q.items() if v is not None})
         return result
+
+
 
     async def _get_quotes_futu(self, symbols_with_market: List[tuple]) -> Dict[str, Dict]:
         """通过富途 OpenD 获取 US/HK 行情（含 PE/PB、change_pct、52w 高低）"""
