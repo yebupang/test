@@ -39,6 +39,12 @@ class SyncService:
             if cash_data:
                 await self._update_cash(account_id, cash_data)
 
+            # 同步完成后自动刷新行情（Futu→AKShare），补齐 PE/PB/今日变化等字段
+            try:
+                await self.refresh_quotes(account_id)
+            except Exception as e:
+                logger.warning(f"{broker_name} 同步后行情刷新失败: {e}")
+
             log.status = "success"
             log.positions_updated = count
             log.message = f"成功同步 {count} 条持仓" + (f"，现金 {cash_data['amount']:.0f} {cash_data['currency']}" if cash_data else "")
@@ -96,6 +102,11 @@ class SyncService:
             await self._deactivate_csv_positions(account_id)
             count = await self._upsert_positions(account_id, positions_data)
 
+            try:
+                await self.refresh_quotes(account_id)
+            except Exception as e:
+                logger.warning(f"CSV 同步后行情刷新失败: {e}")
+
             log.status = "success" if not errors else "partial"
             log.positions_updated = count
             log.message = f"导入 {count} 条，{len(errors)} 条错误: {'; '.join(errors[:3])}"
@@ -122,6 +133,11 @@ class SyncService:
             await self._deactivate_csv_positions(account_id)
             count = await self._upsert_positions(account_id, positions_data)
 
+            try:
+                await self.refresh_quotes(account_id)
+            except Exception as e:
+                logger.warning(f"PDF 同步后行情刷新失败: {e}")
+
             log.status = "success" if not errors else "partial"
             log.positions_updated = count
             log.message = f"PDF 导入 {count} 条，{len(errors)} 条错误" + (f": {'; '.join(errors[:3])}" if errors else "")
@@ -146,12 +162,13 @@ class SyncService:
             from brokers.image_importer import parse_huabao_images
             positions_data, account_summary, errors = parse_huabao_images(images)
 
-            # 理财资产（货币基金/理财产品）作为合成 _FUND 持仓写入，确保计入总资产
+            # 理财资产（如消费红利等股票基金）作为合成持仓写入，按股票口径计入总资产
+            # 注：A 股 APP 截图汇总仅给出理财总额，无法识别具体基金，暂统一按股票（is_cash_equivalent=False）
             wealth = float(account_summary.get("wealth_management") or 0) if account_summary else 0
             if wealth > 0:
                 positions_data.append({
-                    "symbol": "_FUND",
-                    "name": "理财资产",
+                    "symbol": "_WEALTH",
+                    "name": "理财基金",
                     "market": "A",
                     "currency": "CNY",
                     "quantity": 1,
@@ -160,7 +177,7 @@ class SyncService:
                     "market_value": round(wealth, 2),
                     "unrealized_pnl": 0,
                     "unrealized_pnl_pct": 0,
-                    "is_cash_equivalent": True,
+                    "is_cash_equivalent": False,
                 })
 
             await self._deactivate_csv_positions(account_id)
@@ -174,6 +191,12 @@ class SyncService:
                     "currency": "CNY",
                 })
                 cash_msg = f"，现金 {account_summary['cash']:.2f} 元"
+
+            # 自动刷新行情（A股 PE/PB 由 AKShare 提供；港股若同账户混合，由 Futu 兜底）
+            try:
+                await self.refresh_quotes(account_id)
+            except Exception as e:
+                logger.warning(f"截图同步后行情刷新失败: {e}")
 
             wealth_msg = f"，理财 {wealth:.2f} 元" if wealth > 0 else ""
             log.status = "success" if not errors else "partial"
@@ -206,8 +229,11 @@ class SyncService:
         if not positions:
             return 0
 
-        # 货币基金不走行情刷新（价格几乎恒为 1，净值由基金公司更新）
-        positions = [p for p in positions if not p.is_cash_equivalent]
+        # 货币基金及合成持仓（_WEALTH/_FUND 等）不走行情刷新
+        positions = [
+            p for p in positions
+            if not p.is_cash_equivalent and not (p.symbol or "").startswith("_")
+        ]
         symbols_with_market = [(p.symbol, p.market) for p in positions]
         quotes = await self.market_data.get_realtime_quotes(symbols_with_market)
 

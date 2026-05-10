@@ -55,7 +55,80 @@ class MarketDataService:
         return result
 
     async def _get_us_quotes(self, symbols: List[str]) -> Dict[str, Dict]:
-        """美股行情（AKShare 实时）"""
+        """美股行情：Futu OpenD 优先（含 PE/PB/change），AKShare 兜底"""
+        result = await self._get_quotes_futu([(s, "US") for s in symbols])
+        missing = [s for s in symbols if s not in result or not result[s].get("current_price")]
+        if missing:
+            ak_result = await self._get_us_quotes_akshare(missing)
+            for s, q in ak_result.items():
+                result.setdefault(s, {}).update({k: v for k, v in q.items() if v is not None})
+        return result
+
+    async def _get_hk_quotes(self, symbols: List[str]) -> Dict[str, Dict]:
+        """港股行情：Futu OpenD 优先（含 PE/PB/change），AKShare 兜底"""
+        result = await self._get_quotes_futu([(s, "HK") for s in symbols])
+        missing = [s for s in symbols if s not in result or not result[s].get("current_price")]
+        if missing:
+            ak_result = await self._get_hk_quotes_akshare(missing)
+            for s, q in ak_result.items():
+                result.setdefault(s, {}).update({k: v for k, v in q.items() if v is not None})
+        return result
+
+    async def _get_quotes_futu(self, symbols_with_market: List[tuple]) -> Dict[str, Dict]:
+        """通过富途 OpenD 获取 US/HK 行情（含 PE/PB、change_pct、52w 高低）"""
+        if not symbols_with_market:
+            return {}
+        try:
+            from config import get_settings
+            settings = get_settings()
+
+            def _fetch():
+                import futu as ft
+                ctx = ft.OpenQuoteContext(host=settings.futu_host, port=settings.futu_port)
+                try:
+                    codes = []
+                    for sym, market in symbols_with_market:
+                        prefix = "US" if market == "US" else "HK"
+                        codes.append(f"{prefix}.{sym}")
+                    ret, data = ctx.get_market_snapshot(codes)
+                    if ret != ft.RET_OK or data is None or data.empty:
+                        return {}
+                    out: Dict[str, Dict] = {}
+                    for i in range(len(data)):
+                        row = data.iloc[i]
+                        code = str(row.get("code", ""))
+                        symbol = code.split(".")[-1]
+                        out[symbol] = {
+                            "current_price": self._safe_float(row.get("last_price")),
+                            "open_price":    self._safe_float(row.get("open_price")),
+                            "high_price":    self._safe_float(row.get("high_price")),
+                            "low_price":     self._safe_float(row.get("low_price")),
+                            "prev_close":    self._safe_float(row.get("prev_close_price")),
+                            "change_pct":    self._safe_float(row.get("change_rate")),
+                            "volume":        self._safe_float(row.get("volume")),
+                            "pe_ratio":      self._safe_float(row.get("pe_ratio")),
+                            "pb_ratio":      self._safe_float(row.get("pb_ratio")),
+                            "dividend_yield": self._safe_float(row.get("dividend_ratio_ttm"))
+                                              or self._safe_float(row.get("dividend_ttm")),
+                            "market_cap":    self._safe_float(row.get("total_market_val"))
+                                              or self._safe_float(row.get("market_val")),
+                            "week_52_high":  self._safe_float(row.get("high_price_52weeks")),
+                            "week_52_low":   self._safe_float(row.get("low_price_52weeks")),
+                        }
+                    return out
+                finally:
+                    ctx.close()
+
+            return await asyncio.wait_for(
+                asyncio.to_thread(_fetch),
+                timeout=12.0,
+            )
+        except Exception as e:
+            logger.warning(f"富途行情获取失败: {e}")
+            return {}
+
+    async def _get_us_quotes_akshare(self, symbols: List[str]) -> Dict[str, Dict]:
+        """美股行情兜底（AKShare 历史日线）"""
         try:
             import akshare as ak
             result = {}
@@ -92,14 +165,13 @@ class MarketDataService:
             logger.error("akshare 未安装，请运行: pip install akshare")
             return {}
 
-    async def _get_hk_quotes(self, symbols: List[str]) -> Dict[str, Dict]:
-        """港股行情（AKShare 实时）"""
+    async def _get_hk_quotes_akshare(self, symbols: List[str]) -> Dict[str, Dict]:
+        """港股行情兜底（AKShare 历史日线）"""
         try:
             import akshare as ak
             result = {}
             for symbol in symbols:
                 try:
-                    # AKShare 港股代码格式：00700
                     df = await asyncio.wait_for(
                         asyncio.to_thread(
                             ak.stock_hk_hist, symbol=symbol, period="daily",
