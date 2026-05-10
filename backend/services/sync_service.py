@@ -145,6 +145,24 @@ class SyncService:
         try:
             from brokers.image_importer import parse_huabao_images
             positions_data, account_summary, errors = parse_huabao_images(images)
+
+            # 理财资产（货币基金/理财产品）作为合成 _FUND 持仓写入，确保计入总资产
+            wealth = float(account_summary.get("wealth_management") or 0) if account_summary else 0
+            if wealth > 0:
+                positions_data.append({
+                    "symbol": "_FUND",
+                    "name": "理财资产",
+                    "market": "A",
+                    "currency": "CNY",
+                    "quantity": 1,
+                    "cost_price": wealth,
+                    "current_price": wealth,
+                    "market_value": round(wealth, 2),
+                    "unrealized_pnl": 0,
+                    "unrealized_pnl_pct": 0,
+                    "is_cash_equivalent": True,
+                })
+
             await self._deactivate_csv_positions(account_id)
             count = await self._upsert_positions(account_id, positions_data)
 
@@ -157,11 +175,12 @@ class SyncService:
                 })
                 cash_msg = f"，现金 {account_summary['cash']:.2f} 元"
 
+            wealth_msg = f"，理财 {wealth:.2f} 元" if wealth > 0 else ""
             log.status = "success" if not errors else "partial"
             log.positions_updated = count
             img_count = len(images)
             log.message = (
-                f"{img_count} 张截图导入 {count} 条{cash_msg}，{len(errors)} 条错误"
+                f"{img_count} 张截图导入 {count} 条{cash_msg}{wealth_msg}，{len(errors)} 条错误"
                 + (f": {'; '.join(errors[:3])}" if errors else "")
             )
             log.finished_at = datetime.utcnow()
