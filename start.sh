@@ -63,12 +63,12 @@ else
     npm install --legacy-peer-deps
   fi
 
-  # 生产模式：检查是否需要重新构建
+  # 生产模式：以 .next/BUILD_ID 判断（dev 模式不生成此文件，避免误判）
   if [ "$MODE" = "prod" ]; then
     NEEDS_BUILD=0
-    if [ ! -d ".next" ]; then
+    if [ ! -f ".next/BUILD_ID" ]; then
       NEEDS_BUILD=1
-    elif find src -newer .next -name "*.ts" -o -newer .next -name "*.tsx" -o -newer .next -name "*.css" 2>/dev/null | grep -q .; then
+    elif find src -newer ".next/BUILD_ID" \( -name "*.ts" -o -name "*.tsx" -o -name "*.css" \) 2>/dev/null | grep -q .; then
       NEEDS_BUILD=1
     fi
 
