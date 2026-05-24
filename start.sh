@@ -1,5 +1,8 @@
 #!/bin/bash
-# 投资助手启动脚本（本地开发）
+# 投资助手启动脚本
+# 用法:
+#   ./start.sh          — 生产模式（支持 Tailscale 远程访问）
+#   ./start.sh --dev    — 开发模式（热重载，仅本机访问）
 
 set -e
 
@@ -7,8 +10,18 @@ ROOT=$(cd "$(dirname "$0")" && pwd)
 BACKEND="$ROOT/backend"
 FRONTEND="$ROOT/frontend"
 
+# 默认生产模式，--dev 参数切换到开发模式
+MODE="prod"
+if [ "$1" = "--dev" ]; then
+  MODE="dev"
+fi
+
 echo "=============================="
-echo "  投资助手 — 本地启动"
+if [ "$MODE" = "dev" ]; then
+  echo "  投资助手 — 开发模式（热重载）"
+else
+  echo "  投资助手 — 生产模式（远程可访问）"
+fi
 echo "=============================="
 
 # ── 检查 Python ──────────────────────────────────────────
@@ -49,6 +62,24 @@ else
     echo "  安装 npm 依赖..."
     npm install --legacy-peer-deps
   fi
+
+  # 生产模式：检查是否需要重新构建
+  if [ "$MODE" = "prod" ]; then
+    NEEDS_BUILD=0
+    if [ ! -d ".next" ]; then
+      NEEDS_BUILD=1
+    elif find src -newer .next -name "*.ts" -o -newer .next -name "*.tsx" -o -newer .next -name "*.css" 2>/dev/null | grep -q .; then
+      NEEDS_BUILD=1
+    fi
+
+    if [ "$NEEDS_BUILD" = "1" ]; then
+      echo ""
+      echo "[2.5/4] 构建前端..."
+      npm run build
+    else
+      echo "  前端已是最新构建，跳过 build"
+    fi
+  fi
 fi
 
 # ── 启动服务 ──────────────────────────────────────────────
@@ -66,7 +97,11 @@ if [ -z "$SKIP_FRONTEND" ]; then
   echo ""
   echo "[4/4] 启动前端 (port 3000)..."
   cd "$FRONTEND"
-  npm run dev &
+  if [ "$MODE" = "dev" ]; then
+    npm run dev &
+  else
+    npm start &
+  fi
   FRONTEND_PID=$!
   echo "  前端 PID: $FRONTEND_PID"
 fi
