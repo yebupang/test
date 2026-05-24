@@ -79,6 +79,13 @@ echo "  API 文档: http://localhost:8000/docs"
 if [ -z "$SKIP_FRONTEND" ]; then
   echo "  前端界面: http://localhost:3000"
 fi
+TAIL_IP=$(tailscale ip -4 2>/dev/null)
+if [ -n "$TAIL_IP" ]; then
+  echo ""
+  echo "  [Tailscale 远程访问]"
+  echo "  前端界面: http://$TAIL_IP:3000"
+  echo "  后端 API: http://$TAIL_IP:8000"
+fi
 echo "  按 Ctrl+C 停止所有服务"
 echo "=============================="
 
